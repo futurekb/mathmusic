@@ -339,7 +339,7 @@ const SCHED_TICK_MS = 25;         // scheduler wake-up interval
 const START_DELAY_SEC = 0.03;     // small delay so first events are in the future
 const VOICE_STOP_SEC = 0.08;      // fade-out time when voices are torn down
 const JUMP_SEMITONES = 0.75;      // larger pitch jumps are applied instantly (no glide)
-const VOICE_HEADROOM = 0.32;      // per-voice gain scale before the master bus
+const VOICE_HEADROOM = 0.5;       // per-voice gain scale before the master bus
 const MAX_LAYERS = 6;
 const RANGE_SAMPLES = 400;        // samples used to auto-fit the y range
 const MIN_Y_SPAN = 12;
@@ -388,6 +388,7 @@ const REVERB_SEC = 3;
 const REVERB_DECAY = 3.2;
 const REVERB_WET_MAX = 0.8;
 const AMP_MAX = 2;
+const AMP_VISIBLE = 0.02;         // below this a(x) the curve is drawn as silent
 const ENVELOPES = {
   hold: { label: '持続', div: 0, decay: 0 },
   '1':  { label: '1拍ごとに減衰', div: 1, decay: 5 },
@@ -1003,11 +1004,12 @@ const EmotionGen = (() => {
  * Sound-effect generator (one-shots, x/t in seconds at 240 BPM)
  * ==================================================================== */
 const SFX_BPM = 240;
+const SFX_GAIN = 1.8;             // one-shots should cut through the music
 
 function sfxSong(name, dur, reverb, layers, notes, loop = false) {
   return {
     name: `SFX · ${name}`, bpm: SFX_BPM, length: Math.max(1, Math.ceil((dur * SFX_BPM) / 60)),
-    loop, reverb, layers: layers.map((l) => ({ env: 'hold', ...l })), notes,
+    loop, reverb, layers: layers.map((l) => ({ env: 'hold', ...l, vol: Math.min(1, l.vol * SFX_GAIN) })), notes,
   };
 }
 
@@ -1717,8 +1719,9 @@ function renderStatic() {
     ctx.beginPath();
     let prev = NaN;
     for (let px = plot.l; px <= plot.r; px += 1) {
-      const y = evalLayer(layer, Math.min(pxToX(px), state.length - 1e-9));
-      if (!Number.isFinite(y)) { prev = NaN; continue; }
+      const x = Math.min(pxToX(px), state.length - 1e-9);
+      const y = evalLayer(layer, x);
+      if (!Number.isFinite(y) || ampAt(layer, x) < AMP_VISIBLE) { prev = NaN; continue; }
       const py = yToPx(y);
       if (!Number.isFinite(prev) || Math.abs(y - prev) > breakThreshold) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
@@ -1767,7 +1770,7 @@ function drawFrame(beat) {
 
   // Dots on each curve at the current x
   state.layers.forEach((layer, i) => {
-    if (layer.muted || isDrumLayer(layer)) return;
+    if (layer.muted || isDrumLayer(layer) || ampAt(layer, beat) < AMP_VISIBLE) return;
     const y = evalLayer(layer, beat);
     if (!Number.isFinite(y) || y < view.y0 || y > view.y1) return;
     const py = yToPx(y);
