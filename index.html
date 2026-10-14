@@ -1,0 +1,2439 @@
+<!doctype html>
+<!--
+  Graph Synth — a graphing-calculator synthesizer.
+  x axis = time (beats), y axis = pitch (semitones from A4).
+  A red playhead travels along x; each layer's y value is converted to a frequency
+  (f = 440 * 2^(y/12)) and played through Web Audio oscillators.
+  Single-file app: math.js (sandboxed parser) + KaTeX (equation rendering).
+-->
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph Synth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.2/lib/browser/math.js"></script>
+<style>
+  :root {
+    --bg: #0d0c0b;
+    --panel: #161412;
+    --panel-2: #1e1b18;
+    --line: #2c2824;
+    --text: #efe8de;
+    --muted: #968c81;
+    --accent: #ff8a1f;
+    --accent-2: #ffb25e;
+    --red: #ff3b30;
+    --error: #ff6b5e;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); }
+  body { min-height: 100vh; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  input[type="range"] { accent-color: var(--accent); }
+
+  .app { max-width: 1520px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* ---------- Header ---------- */
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 18px; letter-spacing: .12em; display: flex; align-items: center; gap: 10px; }
+  .logo-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
+  .logo-mark svg { display: block; }
+  .logo small { color: var(--muted); font-weight: 400; letter-spacing: .04em; font-size: 12px; }
+  .spacer { flex: 1; }
+  .field { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  select, .btn {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+    padding: 7px 11px; cursor: pointer; font-size: 13px;
+  }
+  select:focus-visible, .btn:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn:hover { border-color: #4a433c; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.accent { background: var(--accent); color: #1a0f05; border-color: transparent; font-weight: 600; }
+
+  /* ---------- Layout ---------- */
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .stage { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+
+  /* ---------- Graph ---------- */
+  .graph-wrap {
+    position: relative; height: clamp(300px, 56vh, 640px); overflow: hidden;
+    border-radius: var(--radius); border: 1px solid var(--line);
+    box-shadow: inset 0 0 0 1px rgba(255, 138, 31, .06), 0 20px 50px -30px rgba(255, 138, 31, .35);
+  }
+  #graph { width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+  .readout {
+    position: absolute; top: 12px; left: 56px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px;
+    pointer-events: none; font-family: var(--mono); font-size: 12px;
+  }
+  .chip { background: rgba(13, 12, 11, .78); border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; backdrop-filter: blur(4px); white-space: nowrap; }
+  .chip b { font-weight: 600; }
+
+  /* ---------- Equations ---------- */
+  .equations { padding: 6px 18px; overflow-x: auto; }
+  .eq { overflow-x: auto; overflow-y: hidden; }
+  .eq .katex-display { margin: .55em 0; text-align: left; }
+  .eq .katex { font-size: 1.22em; }
+  .eq.muted { opacity: .35; }
+  .eq.map { color: var(--muted); border-top: 1px dashed var(--line); padding: 8px 0 6px; font-size: 13px; }
+  .eq.map .katex { font-size: 1.05em; }
+
+  /* ---------- Player ---------- */
+  .player { padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; }
+  .play-btn {
+    width: 54px; height: 54px; border-radius: 50%; border: none; background: var(--accent); color: #1a0f05;
+    display: grid; place-items: center; cursor: pointer; flex: none;
+    box-shadow: 0 6px 20px -6px rgba(255, 138, 31, .7);
+    transition: transform .08s ease;
+  }
+  .play-btn:active { transform: scale(.95); }
+  .play-btn:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+  .seek { flex: 1 1 280px; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
+  .seek input { width: 100%; margin: 0; }
+  .time { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .time .now { color: var(--text); }
+  .knob { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); min-width: 120px; }
+  .knob span { display: flex; justify-content: space-between; }
+  .knob output { font-family: var(--mono); color: var(--text); }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .toggle.on { border-color: var(--accent); color: var(--accent-2); }
+  #scope { width: 140px; height: 40px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); }
+
+  /* ---------- Side panel ---------- */
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .side-section { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .side-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .layer { border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: 11px; padding: 10px; background: var(--panel-2); display: flex; flex-direction: column; gap: 8px; }
+  .layer.muted { opacity: .55; }
+  .layer-head { display: flex; align-items: center; gap: 8px; }
+  .layer-name { font-family: var(--mono); font-weight: 700; color: var(--c); }
+  .layer-head .spacer { flex: 1; }
+  .icon-btn { background: transparent; border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  .icon-btn:hover { color: var(--text); border-color: #4a433c; }
+  .icon-btn.on { color: var(--c); border-color: var(--c); }
+  .layer textarea {
+    width: 100%; resize: vertical; min-height: 58px; background: #0f0e0c; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 13px; line-height: 1.45;
+  }
+  .layer textarea.invalid { border-color: var(--error); }
+  .err { color: var(--error); font-size: 12px; font-family: var(--mono); min-height: 0; }
+  .err:empty { display: none; }
+  .layer-ctrls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .layer-ctrls select { width: 100%; padding: 5px 8px; font-size: 12px; }
+  .layer-ctrls .vol { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .layer-ctrls .vol input { flex: 1; }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); }
+  .settings-row input[type="number"] { width: 80px; background: #0f0e0c; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-family: var(--mono); }
+  details { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  details summary { cursor: pointer; color: var(--text); font-weight: 500; }
+  details code { font-family: var(--mono); color: var(--accent-2); background: #0f0e0c; padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+  details ul { padding-left: 18px; margin: 8px 0; }
+  .kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; }
+
+  .fav-save { display: flex; gap: 8px; }
+  .fav-save input { flex: 1; min-width: 0; background: #0f0e0c; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font-size: 13px; }
+  .fav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+  .fav-item { display: flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 4px 4px 4px 0; }
+  .fav-item.current { border-color: var(--accent); }
+  .fav-load { flex: 1; min-width: 0; text-align: left; background: none; border: none; cursor: pointer; padding: 4px 10px; display: flex; flex-direction: column; gap: 1px; }
+  .fav-load b { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fav-load small { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+  .fav-empty { color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .export-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .export-grid select { width: 100%; font-size: 12px; padding: 6px 8px; }
+  .export-status { font-size: 12px; color: var(--muted); font-family: var(--mono); line-height: 1.5; }
+  .export-status:empty { display: none; }
+  .song-name { font-family: var(--mono); font-size: 13px; color: var(--accent-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0;
+    background: var(--panel-2); border: 1px solid var(--accent); padding: 10px 16px; border-radius: 10px; font-size: 13px;
+    transition: all .2s ease; pointer-events: none; z-index: 10;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .fatal { padding: 24px; color: var(--error); font-family: var(--mono); }
+
+  @media (max-width: 560px) {
+    .app { padding: 12px 16px; }
+    .readout { left: 12px; }
+    #scope { display: none; }
+    .knob { min-width: 0; flex: 1 1 120px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">
+      <div class="logo-mark" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 20 20"><path d="M2 14 C5 2, 8 2, 10 10 S15 18, 18 6" fill="none" stroke="#1a0f05" stroke-width="2.4" stroke-linecap="round"/><circle cx="10" cy="10" r="2.4" fill="#ff3b30"/></svg>
+      </div>
+      <div>GRAPH·SYNTH<br><small>数式を描いて、鳴らす。</small></div>
+    </div>
+    <span class="song-name" id="songName"></span>
+    <div class="spacer"></div>
+    <button class="btn" id="prevSong" title="ひとつ前の曲に戻す">↶ 戻る</button>
+    <label class="field">スタイル <select id="style" title="ランダム生成するBGMのジャンル"></select></label>
+    <button class="btn accent" id="randomize" title="ランダムな数式で曲を作る（R キー）">🎲 ランダム生成</button>
+    <label class="field">プリセット <select id="preset"></select></label>
+    <button class="btn" id="share" title="現在の数式をURLとしてコピー">リンクをコピー</button>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div class="graph-wrap">
+        <canvas id="graph" aria-label="数式グラフ。クリックまたはドラッグでシーク"></canvas>
+        <div class="readout" id="readout"></div>
+      </div>
+
+      <div class="card player">
+        <button class="play-btn" id="play" aria-label="再生"></button>
+        <div class="seek">
+          <input type="range" id="progress" min="0" max="1000" step="1" value="0" aria-label="再生位置">
+          <div class="time"><span class="now" id="timeNow">0:00.00</span><span id="beatNow">拍 0.00 / 16</span><span id="timeTotal">0:08.00</span></div>
+        </div>
+        <label class="knob"><span>テンポ <output id="bpmOut">120</output></span><input type="range" id="bpm" min="40" max="240" step="1" value="120"></label>
+        <label class="knob"><span>音量 <output id="volOut">70</output></span><input type="range" id="volume" min="0" max="1" step="0.01" value="0.7"></label>
+        <button class="btn toggle on" id="loop" aria-pressed="true">⟲ ループ</button>
+        <canvas id="scope" aria-hidden="true"></canvas>
+      </div>
+
+      <div class="card equations" id="equations"></div>
+    </section>
+
+    <aside class="side">
+      <div class="card side-section">
+        <div class="side-title">お気に入り <span id="favCount"></span></div>
+        <div class="fav-save">
+          <input id="favName" maxlength="60" placeholder="名前を付けて保存" aria-label="保存する名前">
+          <button class="btn accent" id="favSave">★ 保存</button>
+        </div>
+        <ul class="fav-list" id="favList"></ul>
+      </div>
+
+      <div class="card side-section">
+        <div class="side-title">書き出し</div>
+        <div class="export-grid">
+          <label>形式
+            <select id="exportFormat">
+              <option value="wav">WAV（16bit / 44.1kHz）</option>
+              <option value="mp3">MP3（192kbps）</option>
+            </select>
+          </label>
+          <label>長さ
+            <select id="exportMode">
+              <option value="seamless">ゲーム用ループ（1周・継ぎ目なし）</option>
+              <option value="1">1周</option>
+              <option value="2">2周</option>
+              <option value="4">4周</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn accent" id="exportBtn">⬇ ダウンロード</button>
+        <div class="export-status" id="exportStatus"></div>
+      </div>
+
+      <div class="card side-section">
+        <div class="side-title">レイヤー <button class="btn" id="addLayer">＋ 追加</button></div>
+        <div id="layers" style="display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+
+      <div class="card side-section">
+        <div class="side-title">曲の設定</div>
+        <label class="settings-row">長さ（拍） <input type="number" id="length" min="1" max="256" step="1" value="16"></label>
+        <details>
+          <summary>数式リファレンス</summary>
+          <ul>
+            <li><code>x</code> = 拍（時間）、<code>t</code> = 秒</li>
+            <li>y の値は半音：<code>0</code> = A4 (440Hz)、<code>12</code> = 1オクターブ上</li>
+            <li><code>NaN</code> を返すと休符（無音）</li>
+            <li>区分関数：<code>x &lt; 4 ? 0 : x &lt; 8 ? 5 : 7</code></li>
+            <li><code>floor ceil round abs sin cos exp log sqrt min max</code></li>
+            <li><code>mod(a, b)</code> または <code>a % b</code></li>
+            <li><code>frac(x)</code> 小数部、<code>pick(i, a, b, …)</code> i 番目の値（循環）</li>
+            <li><code>tri(x) saw(x) sqr(x)</code> 周期1の波形（−1〜1）、<code>clamp(v, lo, hi)</code></li>
+            <li><code>;</code> で複数文：<code>u = mod(x, 8); u &lt; 4 ? u : 8 - u</code></li>
+          </ul>
+          操作：<span class="kbd">R</span> ランダム生成、<span class="kbd">Space</span> 再生/停止、<span class="kbd">←</span><span class="kbd">→</span> 1拍シーク、グラフをクリック/ドラッグでシーク。
+        </details>
+      </div>
+    </aside>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+ * Constants
+ * ==================================================================== */
+const A4_FREQ = 440;
+const FREQ_MIN = 20;
+const FREQ_MAX = 12000;
+const SCHED_STEP_SEC = 0.005;     // audio automation resolution
+const LOOKAHEAD_SEC = 0.12;       // how far ahead the scheduler writes automation
+const SCHED_TICK_MS = 25;         // scheduler wake-up interval
+const START_DELAY_SEC = 0.03;     // small delay so first events are in the future
+const VOICE_STOP_SEC = 0.08;      // fade-out time when voices are torn down
+const JUMP_SEMITONES = 0.75;      // larger pitch jumps are applied instantly (no glide)
+const VOICE_HEADROOM = 0.32;      // per-voice gain scale before the master bus
+const MAX_LAYERS = 6;
+const RANGE_SAMPLES = 400;        // samples used to auto-fit the y range
+const MIN_Y_SPAN = 12;
+const Y_CLAMP = 72;               // auto-fit never exceeds ±6 octaves
+const PROGRESS_RES = 1000;
+const DRUM_LANE_PX = 22;          // max height of drum hits drawn at the bottom of the graph
+const SEEK_KEY_BEATS = 1;
+
+const LAYER_COLORS = ['#ff9a3c', '#4fd1c5', '#c084fc', '#facc15', '#60a5fa', '#f472b6'];
+const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+/**
+ * Instruments. kind:
+ *  osc    — single native oscillator
+ *  wave   — custom PeriodicWave (cosine harmonic amplitudes)
+ *  detune — several detuned oscillators, optional lowpass tracking the pitch
+ *  fm     — 2-operator FM (modulator ratio / index)
+ *  noise  — white noise through a bandpass whose centre follows y (drums)
+ * `level` compensates loudness differences between instruments.
+ */
+const pulseHarmonics = (duty) => Array.from({ length: 48 }, (_, n) => (n === 0 ? 0 : (2 / (n * Math.PI)) * Math.sin(n * Math.PI * duty)));
+const INSTRUMENTS = {
+  sine:     { label: 'サイン波', kind: 'osc', type: 'sine', level: 1 },
+  triangle: { label: '三角波', kind: 'osc', type: 'triangle', level: 1 },
+  square:   { label: '矩形波', kind: 'osc', type: 'square', level: 0.6 },
+  sawtooth: { label: 'ノコギリ波', kind: 'osc', type: 'sawtooth', level: 0.65 },
+  pulse25:  { label: 'パルス25%（8bit）', kind: 'wave', harmonics: pulseHarmonics(0.25), level: 0.6 },
+  pulse12:  { label: 'パルス12.5%（8bit）', kind: 'wave', harmonics: pulseHarmonics(0.125), level: 0.6 },
+  organ:    { label: 'オルガン', kind: 'wave', harmonics: [0, 1, 0.8, 0.55, 0.4, 0, 0.3, 0, 0.25], level: 0.7 },
+  flute:    { label: 'フルート', kind: 'wave', harmonics: [0, 1, 0.22, 0.08, 0.03], level: 0.9 },
+  supersaw: { label: 'スーパーソウ', kind: 'detune', type: 'sawtooth', cents: [-16, 0, 16], level: 0.55 },
+  pad:      { label: 'パッド', kind: 'detune', type: 'sawtooth', cents: [-10, 10], lowpass: 2.5, level: 0.8 },
+  bell:     { label: 'ベル（FM）', kind: 'fm', ratio: 3.5, index: 2.2, level: 0.8 },
+  epiano:   { label: 'エレピ（FM）', kind: 'fm', ratio: 1, index: 1.1, level: 0.85 },
+  musicbox: { label: 'オルゴール（FM）', kind: 'fm', ratio: 5, index: 0.9, level: 0.8 },
+  strings:  { label: 'ストリングス', kind: 'detune', type: 'sawtooth', cents: [-7, 0, 7], lowpass: 3.5, level: 0.75 },
+  choir:    { label: 'クワイア（声）', kind: 'wave', harmonics: [0, 1, 0.45, 0.25, 0.5, 0.4, 0.15, 0.1, 0.06], level: 0.8 },
+  cluster:  { label: 'クラスター（不協和）', kind: 'detune', type: 'sawtooth', cents: [0, 100, 600], lowpass: 3, level: 0.6 },
+  rough:    { label: 'ラフネス（悲鳴質）', kind: 'rough', type: 'sawtooth', amHz: 55, depth: 0.9, level: 0.6 },
+  shepard:  { label: 'シェパード音（無限上昇）', kind: 'shepard', level: 0.9 },
+  noise:    { label: 'ノイズ（ドラム・環境音）', kind: 'noise', q: 0.9, level: 1.4 },
+};
+const SHEPARD_SPAN = 3;           // partials from -3 to +3 octaves
+const SHEPARD_CENTER_HZ = 440;
+const SHEPARD_SIGMA = 1.1;        // spectral envelope width in octaves
+const REVERB_SEC = 3;
+const REVERB_DECAY = 3.2;
+const REVERB_WET_MAX = 0.8;
+const AMP_MAX = 2;
+const ENVELOPES = {
+  hold: { label: '持続', div: 0, decay: 0 },
+  '1':  { label: '1拍ごとに減衰', div: 1, decay: 5 },
+  '2':  { label: '1/2拍ごと', div: 2, decay: 5 },
+  '4':  { label: '1/4拍ごと', div: 4, decay: 5 },
+  '8':  { label: '1/8拍ごと', div: 8, decay: 5 },
+  '1s': { label: '1拍・短く（ドラム）', div: 1, decay: 18 },
+  '2s': { label: '1/2拍・短く', div: 2, decay: 18 },
+  '4s': { label: '1/4拍・短く', div: 4, decay: 18 },
+};
+const NOISE_BUFFER_SEC = 2;
+const FILTER_MAX_HZ = 18000;
+const EXPORT_SAMPLE_RATE = 44100;
+const EXPORT_TAIL_SEC = 0.4;
+const LOOP_XFADE_SEC = 0.01;      // crossfade at the seam of a game loop
+const EXPORT_PEAK = 0.89;         // -1 dBFS
+const MP3_KBPS = 192;
+const MP3_BLOCK = 1152;
+const LAMEJS_URL = 'https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js';
+const GRAPH_COLORS = {
+  bg: '#100f0d', grid: '#1f1c19', gridBeat: '#292521', gridMajor: '#3a342e',
+  axis: 'rgba(255,138,31,.55)', label: '#7d746a', labelStrong: '#b3a99d',
+  playhead: 'rgba(255,59,48,.6)', played: 'rgba(255,59,48,.045)', red: '#ff3b30',
+};
+
+const PRESETS = [
+  {
+    name: 'アルペジオ', bpm: 128, length: 16,
+    layers: [
+      { expr: 'pick(floor(x*4), 0, 3, 7, 12, 7, 3) + pick(floor(x/4), 0, -4, 3, -2)', wave: 'triangle', env: '4', vol: 0.55 },
+      { expr: 'pick(floor(x/4), 0, -4, 3, -2) - 24', wave: 'sawtooth', env: '1', vol: 0.35 },
+    ],
+  },
+  {
+    name: 'サイン・グライド', bpm: 90, length: 16,
+    layers: [
+      { expr: '7*sin(pi*x/4) + 2*sin(pi*x)', wave: 'sine', env: 'hold', vol: 0.55 },
+      { expr: '-12 + 5*cos(pi*x/8)', wave: 'triangle', env: 'hold', vol: 0.35 },
+    ],
+  },
+  {
+    name: 'キック & ベース', bpm: 124, length: 8,
+    layers: [
+      { expr: '-38 + 30*exp(-20*frac(x))', wave: 'sine', env: '1', vol: 0.95 },
+      { expr: 'frac(x) < 0.5 ? NaN : pick(floor(x/2), -26, -26, -21, -23)', wave: 'sawtooth', env: '2', vol: 0.35 },
+      { expr: 'frac(x/2) < 0.75 ? NaN : 3 + pick(floor(x/2), 0, 0, 5, 7)', wave: 'square', env: '4', vol: 0.2 },
+    ],
+  },
+  {
+    name: '区分関数メロディ', bpm: 110, length: 16,
+    layers: [
+      { expr: 'x < 4 ? floor(2*x) : x < 8 ? 8 - floor(2*(x - 4)) : x < 12 ? 7 + 5*sin(pi*x) : floor(3*abs(x - 14)) - 2', wave: 'square', env: '2', vol: 0.3 },
+      { expr: '-24 + 5*floor(x/4)', wave: 'triangle', env: 'hold', vol: 0.4 },
+    ],
+  },
+  {
+    name: '音階の波（sin → スケール）', bpm: 116, length: 16,
+    layers: [
+      { expr: 'pick(round(7 + 7*sin(pi*x/4)), -12, -10, -8, -7, -5, -3, -1, 0, 2, 4, 5, 7, 9, 11, 12)', wave: 'square', env: '4', vol: 0.25 },
+      { expr: '-24 + pick(floor(x/4), 0, 5, 7, 5)', wave: 'triangle', env: 'hold', vol: 0.45 },
+    ],
+  },
+  {
+    name: 'mod のベル', bpm: 140, length: 16,
+    layers: [
+      { expr: 'mod(floor(x*4)*7, 24) - 6', wave: 'sine', env: '4', vol: 0.5 },
+      { expr: 'mod(floor(x)*5, 12) - 24', wave: 'triangle', env: '1', vol: 0.4 },
+    ],
+  },
+];
+
+/* ======================================================================
+ * Small helpers
+ * ==================================================================== */
+const $ = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const fracPart = (v) => v - Math.floor(v);
+const posMod = (a, n) => ((a % n) + n) % n;
+const semitoneToFreq = (y) => clamp(A4_FREQ * Math.pow(2, y / 12), FREQ_MIN, FREQ_MAX);
+
+function noteName(y) {
+  const midi = 69 + Math.round(y);
+  return NOTE_NAMES[posMod(midi, 12)] + (Math.floor(midi / 12) - 1);
+}
+
+function formatTime(sec) {
+  const s = Math.max(0, sec);
+  const m = Math.floor(s / 60);
+  return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
+}
+
+function showToast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+/* ======================================================================
+ * Emotion engine
+ * Maps a point on Russell's valence–arousal plane (plus an emotion recipe)
+ * to musical cues reported in music-psychology research. Every decision is
+ * recorded as a note {h, b, r} so the UI can explain *why* it should feel so.
+ * ==================================================================== */
+const REFS = {
+  russell:    'Russell (1980) A circumplex model of affect',
+  zentner:    'Zentner, Grandjean & Scherer (2008) GEMS：音楽が喚起する9つの感情',
+  juslin03:   'Juslin & Laukka (2003) 音楽と声の感情表現のメタ分析',
+  gabrielsson:'Gabrielsson & Lindström (2010) 音楽構造と感情表現（総説）',
+  hevner:     'Hevner (1935–37) 調性・テンポと感情語の実験',
+  huron06:    'Huron (2006) Sweet Anticipation：予期のITPRA理論',
+  huron08:    'Huron (2008) 長調・短調主題の音高と音程幅の比較',
+  sloboda:    'Sloboda (1991) 涙・鳥肌を生む音楽構造',
+  guhn:       'Guhn, Hamm & Zentner (2007) 鳥肌反応の生理・音響的相関',
+  salimpoor:  'Salimpoor et al. (2011) 音楽の期待と頂点でのドーパミン放出',
+  juslin08:   'Juslin & Västfjäll (2008); Juslin (2013) 情動誘発メカニズム BRECVEMA',
+  plomp:      'Plomp & Levelt (1965) 臨界帯域と感覚的不協和（ラフネス）',
+  mcdermott:  'McDermott, Lehr & Oxenham (2010) 協和の好みと調和性・うなり',
+  arnal:      'Arnal et al. (2015) 悲鳴のラフネスが恐怖回路を駆動する',
+  blumstein:  'Blumstein, Bryant & Kaye (2012) 非線形音響と映画音楽の恐怖',
+  neuhoff:    'Neuhoff (2001) 接近音（ルーミング）への適応的知覚バイアス',
+  shepard:    'Shepard (1964) 相対音高の循環性（無限音階）',
+  voss:       'Voss & Clarke (1975) 音楽と音声の1/fゆらぎ',
+  bernardi:   'Bernardi, Porta & Sleight (2006) 音楽による心拍・呼吸の変化',
+  trehub:     'Trehub & Trainor (1998) 子守唄と遊び歌の普遍的特徴',
+};
+const note = (h, b, r) => ({ h, b, r });
+
+const SCALES = {
+  major:     { name: 'メジャー', steps: [0, 2, 4, 5, 7, 9, 11],
+               why: note('長調（メジャー）', '「快・明るさ」と最も一貫して結びつく手掛かり。100年近く再現され続けている。', 'hevner') },
+  minor:     { name: 'マイナー', steps: [0, 2, 3, 5, 7, 8, 10],
+               why: note('短調（マイナー）', '悲しみ・深刻さ・不安の手掛かり。テンポが速いと怒りや緊張に、遅いと悲しみに寄る。', 'hevner') },
+  harmMinor: { name: 'ハーモニックマイナー', steps: [0, 2, 3, 5, 7, 8, 11],
+               why: note('和声的短音階', '導音による主音への強い引力と増2度の跳躍で、劇的・宿命的・異国的な響きになる。', 'gabrielsson') },
+  dorian:    { name: 'ドリアン', steps: [0, 2, 3, 5, 7, 9, 10],
+               why: note('ドリアン旋法', '短調だが6度が明るい：悲しみの中に希望が残る「ほろ苦さ」。', 'gabrielsson') },
+  phrygian:  { name: 'フリジアン', steps: [0, 1, 3, 5, 7, 8, 10],
+               why: note('フリジアン旋法', '主音の半音上（♭2）が常に主音を脅かす：暗さ・威圧・脅威。', 'plomp') },
+  lydian:    { name: 'リディアン', steps: [0, 2, 4, 6, 7, 9, 11],
+               why: note('リディアン旋法', '♯4が長調の安定を少しだけ浮かせる：浮遊感・魔法・驚異（ファンタジー映画の定番）。', 'zentner') },
+  mixo:      { name: 'ミクソリディアン', steps: [0, 2, 4, 5, 7, 9, 10],
+               why: note('ミクソリディアン旋法', '長調だが7度が下がり、素朴で開放的・冒険的。', 'gabrielsson') },
+  majPenta:  { name: 'メジャー・ペンタ', steps: [0, 2, 4, 7, 9],
+               why: note('メジャー・ペンタトニック', '半音を含まないので音同士がぶつからない：素朴・懐かしさ・安心。', 'mcdermott') },
+  wholeTone: { name: '全音音階', steps: [0, 2, 4, 6, 8, 10],
+               why: note('全音音階', 'すべて等間隔で主音の引力がない：夢・非現実・方向感の喪失。', 'huron06') },
+  octatonic: { name: 'ディミニッシュ', steps: [0, 1, 3, 4, 6, 7, 9, 10],
+               why: note('ディミニッシュ（八音音階）', '半音と全音が交互に並ぶ対称構造で、三全音が至る所に現れ解決しない：ホラー/サスペンスの定番。', 'plomp') },
+};
+
+const CHORD_TONES = {
+  maj: [0, 4, 7], min: [0, 3, 7], dim: [0, 3, 6], aug: [0, 4, 8],
+  maj7: [0, 4, 7, 11], min7: [0, 3, 7, 10], dom7: [0, 4, 7, 10],
+};
+
+// Chord progressions: [semitones above key root, quality]; one chord per 4 beats.
+const PROGS = {
+  joy:        { name: 'I–vi–IV–V7', chords: [[0, 'maj'], [9, 'min'], [5, 'maj'], [7, 'dom7']],
+                why: '属七（V7）からIへの強い「解決の予期」が毎周満たされる：安心できる楽しさ。', r: 'huron06' },
+  axis:       { name: 'I–V–vi–IV', chords: [[0, 'maj'], [7, 'maj'], [9, 'min'], [5, 'maj']],
+                why: '長調の中に短和音（vi）が一瞬混じり、明るさに陰影が出る。ポップスの最頻出進行。', r: 'gabrielsson' },
+  royalRoad:  { name: '王道進行 IV△7–V7–iii7–vi7', chords: [[5, 'maj7'], [7, 'dom7'], [4, 'min7'], [9, 'min7']],
+                why: '主和音（I）に一度も戻らず短和音で着地する「解決の先送り」。期待が満たされきらない切なさが涙を誘う（J-POP・アニソンの定番）。', r: 'huron06' },
+  minorPlagal:{ name: 'IV–iv–I（マイナー・サブドミナント）', chords: [[5, 'maj'], [5, 'min'], [0, 'maj'], [0, 'maj7']],
+                why: '長調に短調の和音を借用。3度が半音下がる瞬間の「陰り」が郷愁と感動を生む（映画音楽の泣かせ所）。', r: 'sloboda' },
+  heroic:     { name: '♭VI–♭VII–I（エオリアン終止）', chords: [[8, 'maj'], [10, 'maj'], [0, 'maj'], [0, 'maj']],
+                why: '短調側の和音から全音ずつ上行して長調の主和音に到達：勝利・英雄的な到達感（ゲーム/映画のファンファーレの定番）。', r: 'huron06' },
+  andalusian: { name: 'i–♭VII–♭VI–V（アンダルシア進行）', chords: [[0, 'min'], [10, 'maj'], [8, 'maj'], [7, 'maj']],
+                why: 'ベースが段階的に下行する「ラメント・ベース」。下行は悲嘆・宿命と結びつく。', r: 'gabrielsson' },
+  sadEpic:    { name: 'i–♭VI–♭III–♭VII', chords: [[0, 'min'], [8, 'maj'], [3, 'maj'], [10, 'maj']],
+                why: '短調の中に長三和音が並ぶ「悲壮だが壮大」な響き。悲しみと崇高さが混ざる。', r: 'zentner' },
+  lament:     { name: 'i–v–♭VI–♭III', chords: [[0, 'min'], [7, 'min'], [8, 'maj'], [3, 'maj']],
+                why: '属和音まで短和音にして解決の力を弱め、沈んだまま漂う悲しみ。', r: 'huron06' },
+  calmMaj7:   { name: 'I△7–IV△7', chords: [[0, 'maj7'], [5, 'maj7'], [0, 'maj7'], [5, 'maj7']],
+                why: '2つの和音の往復だけで驚きがない＝予測が当たり続ける安心感。長七度の柔らかい響き。', r: 'huron06' },
+  lydian:     { name: 'I–II（リディアン）', chords: [[0, 'maj'], [2, 'maj'], [0, 'maj7'], [2, 'maj']],
+                why: 'II長和音が♯4を含み、地に足のつかない浮遊感・驚異を生む（ファンタジー映画の「魔法」の響き）。', r: 'zentner' },
+  mediant:    { name: 'I–♭VI–I–III（クロマティック・メディアント）', chords: [[0, 'maj'], [8, 'maj'], [0, 'maj'], [4, 'maj']],
+                why: '共通音を保ったまま遠い調の和音へ跳ぶ：予想外なのに滑らか＝畏怖・壮大さ（映画音楽の定番）。', r: 'huron06' },
+  phrygianHorror:{ name: 'i–♭II–i–♭v°（フリジアン＋三全音）', chords: [[0, 'min'], [1, 'maj'], [0, 'min'], [6, 'dim']],
+                why: '主音の半音上の和音と三全音（悪魔の音程）。最も不安定で、解決する場所がない。', r: 'plomp' },
+  pedal:      { name: 'i ペダル＋♭II', chords: [[0, 'min'], [0, 'min'], [1, 'maj'], [0, 'min']],
+                why: '同じ和音に留まり続け、半音上の和音が一瞬だけ差し込む：「何かが起きそう」な持続的緊張。', r: 'huron06' },
+  wholeTone:  { name: '増三和音の全音移動', chords: [[0, 'aug'], [2, 'aug'], [4, 'aug'], [2, 'aug']],
+                why: '増三和音は対称形で根音が定まらない：方向感の喪失＝不穏・夢うつつ。', r: 'huron06' },
+  battle:     { name: 'i–♭VI–♭VII–i', chords: [[0, 'min'], [8, 'maj'], [10, 'maj'], [0, 'min']],
+                why: '♭VII→i と下から押し上げる推進力：戦闘・決意。', r: 'gabrielsson' },
+};
+
+const CONTOURS = {
+  arch:    { start: [0, 2], steps: [-1, 1, 1, 2, -2, 0], range: [0, 7],
+             why: note('アーチ型の旋律', '上がって下がる最も自然な旋律形。安定と小さな高まりを両立する。', 'huron06') },
+  descend: { start: [4, 5, 6], steps: [-1, -1, 1, 0, -2], range: [0, 8], sequence: -1,
+             why: note('下行ゼクエンツ', '短い動機を一段ずつ下げて繰り返す。Slobodaの調査で「涙」を誘発した代表的な構造。', 'sloboda') },
+  ascend:  { start: [0], steps: [1, 2, -1, 1, 0], range: [0, 9], leap: 3,
+             why: note('上行跳躍（4度）で始まる旋律', '冒頭の上行4度と上向きの動きは高揚・決意・英雄性の手掛かり（ファンファーレの型）。', 'gabrielsson') },
+  static:  { start: [0, 2], steps: [0, 0, 1, -1], range: [0, 4],
+             why: note('狭い音域の反復', '同じ音付近にとどまり変化を抑える：安らぎ、または「動けない」緊張を持続させる。', 'gabrielsson') },
+  wander:  { start: [2, 4], steps: [-3, 3, -1, 1, 4, -4, 0], range: [0, 8],
+             why: note('不規則な跳躍', '次の音が予測しにくい旋律は予期（Prediction）を外し続け、落ち着かなさを生む。', 'huron06') },
+};
+
+// Drum layer templates (noise instrument for snare/hats)
+const KICK = '-38 + 30*exp(-20*frac(x))';
+const DRUMS = {
+  kick4:     { expr: KICK, wave: 'sine', env: '1', vol: 0.85 },
+  kickHalf:  { expr: `mod(floor(x), 2) == 0 ? ${KICK} : NaN`, wave: 'sine', env: '1', vol: 0.75 },
+  kickRock:  { expr: 'pick(floor(x*2), 1, 0, 0, 1, 1, 0, 0, 0) < 1 ? NaN : -38 + 30*exp(-20*frac(x*2))', wave: 'sine', env: '2', vol: 0.85 },
+  snare:     { expr: 'mod(floor(x), 2) == 1 ? 26 : NaN', wave: 'noise', env: '1s', vol: 0.42 },
+  snareMarch:{ expr: 'pick(floor(x*4), 1, 0, 1, 1, 1, 0, 1, 0) < 1 ? NaN : 28', wave: 'noise', env: '4s', vol: 0.26 },
+  hat8:      { expr: '52', wave: 'noise', env: '2s', vol: 0.16 },
+  hatOff:    { expr: 'frac(x) < 0.5 ? NaN : 50', wave: 'noise', env: '2s', vol: 0.2 },
+  hat16:     { expr: '54 + 2*(frac(x*2) < 0.5)', wave: 'noise', env: '4s', vol: 0.13 },
+  shaker:    { expr: 'mod(floor(x*4), 4) == 2 ? 46 : NaN', wave: 'noise', env: '4s', vol: 0.18 },
+};
+const DRUM_SETS = {
+  none:   { kit: [] },
+  light:  { kit: ['hatOff', 'kickHalf'], why: '軽い裏拍のハイハット：歩くような心地よい推進力。' },
+  town:   { kit: ['shaker', 'kickHalf'], why: 'シェイカー中心の軽いリズム：日常の穏やかな活気。' },
+  four:   { kit: ['kick4', 'hatOff'], why: '4つ打ち：一定の拍への身体的同調（リズム同調）で気分が上がる。' },
+  march:  { kit: ['kickHalf', 'snareMarch'], why: '行進のスネア：集団・前進・決意の連想。' },
+  rock:   { kit: ['kickRock', 'snare', 'hat8'], why: 'バックビート（2・4拍のスネア）：強い推進力。' },
+  battle: { kit: ['kickRock', 'snare', 'hat16'], why: '16分のハイハットで密度を上げ、覚醒度を最大化。' },
+};
+
+/**
+ * Emotion recipes. v/a = position on the valence–arousal plane.
+ * gems = closest category in the Geneva Emotional Music Scale.
+ */
+const EMOTIONS = {
+  joy:       { label: '喜び', gems: '快活（Joyful activation）', v: 0.75, a: 0.5, bpm: [120, 140],
+               scales: ['major', 'majPenta', 'mixo'], progs: ['joy', 'axis'], contour: ['arch', 'ascend'], rate: [2, 4], rest: 0.2,
+               lead: ['pulse25', 'epiano', 'organ', 'flute'], harmony: { type: 'arp', inst: ['triangle', 'epiano', 'pulse12'] },
+               bass: { inst: ['triangle'], pattern: ['bounce', 'offbeat'] }, drums: ['four', 'light'], devices: [], reverb: 0.2, register: 2 },
+  heroic:    { label: '勇気・高揚', gems: '力強さ（Power）', v: 0.55, a: 0.85, bpm: [116, 136],
+               scales: ['major', 'mixo'], progs: ['heroic', 'axis'], contour: ['ascend'], rate: [2], rest: 0.15,
+               lead: ['supersaw', 'strings', 'choir'], harmony: { type: 'pad', inst: ['strings'] },
+               bass: { inst: ['sawtooth'], pattern: ['drive'] }, drums: ['march', 'rock'], devices: ['fanfare'], reverb: 0.35, register: 0 },
+  touching:  { label: '感動', gems: '優しさ・超越（Tenderness / Transcendence）', v: 0.35, a: 0.15, bpm: [72, 92],
+               scales: ['major'], progs: ['royalRoad', 'minorPlagal', 'axis'], contour: ['descend', 'arch'], rate: [2], rest: 0.2,
+               lead: ['flute', 'strings', 'choir', 'epiano'], harmony: { type: 'arp', inst: ['epiano', 'musicbox'] },
+               bass: { inst: ['sine', 'triangle'], pattern: ['hold'] }, drums: ['none', 'light'], devices: ['appoggiatura', 'padUnder'], reverb: 0.5, register: 0, climax: true },
+  nostalgia: { label: '郷愁・切なさ', gems: '郷愁（Nostalgia）', v: 0.05, a: -0.45, bpm: [76, 94],
+               scales: ['major', 'majPenta'], progs: ['royalRoad', 'minorPlagal'], contour: ['arch', 'descend'], rate: [2], rest: 0.3,
+               lead: ['epiano', 'musicbox', 'flute'], harmony: { type: 'arp', inst: ['epiano', 'musicbox'] },
+               bass: { inst: ['sine', 'triangle'], pattern: ['hold', 'offbeat'] }, drums: ['none', 'light'], devices: ['appoggiatura', 'tapeWow'], reverb: 0.45, register: 0 },
+  calm:      { label: '安らぎ', gems: '安らぎ（Peacefulness）', v: 0.65, a: -0.7, bpm: [60, 74],
+               scales: ['majPenta', 'major', 'lydian'], progs: ['calmMaj7', 'lydian'], contour: ['static', 'arch'], rate: [1, 2], rest: 0.4,
+               lead: ['flute', 'sine', 'epiano'], harmony: { type: 'pad', inst: ['pad'] },
+               bass: { inst: ['sine'], pattern: ['hold'] }, drums: ['none'], devices: ['breath', 'waves'], reverb: 0.55, register: 0 },
+  wonder:    { label: '神秘・畏怖', gems: '驚異（Wonder）', v: 0.45, a: -0.2, bpm: [70, 90],
+               scales: ['lydian', 'major'], progs: ['mediant', 'lydian'], contour: ['arch', 'ascend'], rate: [2], rest: 0.3,
+               lead: ['bell', 'choir', 'flute'], harmony: { type: 'pad', inst: ['choir', 'pad'] },
+               bass: { inst: ['sine', 'triangle'], pattern: ['hold'] }, drums: ['none'], devices: ['shimmer'], reverb: 0.75, register: 2 },
+  sad:       { label: '悲しみ', gems: '悲しみ（Sadness）', v: -0.65, a: -0.6, bpm: [56, 72],
+               scales: ['minor', 'harmMinor', 'dorian'], progs: ['sadEpic', 'andalusian', 'lament'], contour: ['descend'], rate: [1, 2], rest: 0.25,
+               lead: ['strings', 'flute', 'epiano'], harmony: { type: 'arp', inst: ['epiano', 'musicbox'] },
+               bass: { inst: ['sine'], pattern: ['hold'] }, drums: ['none'], devices: ['lowRegister'], reverb: 0.5, register: -5 },
+  suspense:  { label: '緊張・サスペンス', gems: '緊張（Tension）', v: -0.3, a: 0.45, bpm: [96, 116],
+               scales: ['minor', 'phrygian', 'octatonic'], progs: ['pedal'], contour: ['static'], rate: [1, 2], rest: 0.5,
+               lead: ['pulse12', 'sine', 'strings'], harmony: null,
+               bass: { inst: ['strings', 'sawtooth'], pattern: ['ostinato'] }, drums: ['none'], devices: ['ticking', 'shepard'], reverb: 0.35, register: -2 },
+  unease:    { label: '不穏・不快', gems: '緊張（Tension）', v: -0.6, a: 0.0, bpm: [64, 84],
+               scales: ['wholeTone', 'octatonic'], progs: ['wholeTone'], contour: ['wander'], rate: [1], rest: 0.45,
+               lead: ['organ', 'sine', 'musicbox'], harmony: { type: 'pad', inst: ['pad'] },
+               bass: { inst: ['sine'], pattern: ['hold'] }, drums: ['none'], devices: ['irregular', 'detune', 'clusterDrone'], reverb: 0.45, register: -2 },
+  fear:      { label: '恐怖・ホラー', gems: '—（緊張の極端）', v: -0.85, a: 0.55, bpm: [62, 80],
+               scales: ['phrygian', 'octatonic'], progs: ['phrygianHorror'], contour: ['static', 'wander'], rate: [1, 2], rest: 0.5,
+               lead: ['musicbox'], harmony: null,
+               bass: null, drums: ['none'], devices: ['brokenLullaby', 'clusterDrone', 'heartbeat', 'scream'], reverb: 0.65, register: 0 },
+  anger:     { label: '怒り・激闘', gems: '力強さ・緊張（Power / Tension）', v: -0.45, a: 0.92, bpm: [150, 174],
+               scales: ['phrygian', 'harmMinor', 'minor'], progs: ['battle', 'andalusian'], contour: ['arch', 'ascend'], rate: [4, 2], rest: 0.15,
+               lead: ['supersaw', 'sawtooth', 'rough'], harmony: { type: 'arp', inst: ['pulse25', 'sawtooth'] },
+               bass: { inst: ['sawtooth'], pattern: ['drive'] }, drums: ['battle', 'rock'], devices: [], reverb: 0.15, register: -2 },
+};
+
+// Game scenes = shortcuts into the emotion plane.
+const SCENES = [
+  { label: '⚔ ボス戦', emo: 'anger', climax: true },
+  { label: '🗺 フィールド', emo: 'heroic' },
+  { label: '🏠 町', emo: 'joy' },
+  { label: '🕯 ダンジョン', emo: 'unease' },
+  { label: '👻 ホラー', emo: 'fear' },
+  { label: '🔍 潜入・謎解き', emo: 'suspense' },
+  { label: '🌙 セーブ部屋', emo: 'calm' },
+  { label: '📜 回想', emo: 'nostalgia' },
+  { label: '✨ 神殿・遺跡', emo: 'wonder' },
+  { label: '💀 ゲームオーバー', emo: 'sad' },
+  { label: '🎬 エンディング', emo: 'touching', climax: true },
+];
+
+const BRIGHT_TIMBRES = new Set(['sawtooth', 'supersaw', 'square', 'pulse25', 'pulse12', 'rough', 'organ']);
+const ROOT_MIN = -9;
+const ROOT_MAX = 8;
+const CLIMAX_BEAT = 16;
+const BREATH_SEC = 10;            // ~6 breaths per minute (resonance breathing)
+
+const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const choice = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const chance = (p) => Math.random() < p;
+const mulAmp = (a, b) => (a ? `(${a})*${b}` : b);
+
+function nearestEmotion(v, a) {
+  let best = 'joy';
+  let bestD = Infinity;
+  for (const [k, e] of Object.entries(EMOTIONS)) {
+    const d = (e.v - v) ** 2 + (e.a - a) ** 2;
+    if (d < bestD) { bestD = d; best = k; }
+  }
+  return best;
+}
+
+/** Nearest scale-degree index for a semitone offset above the key root. */
+function degreeOf(steps, semi) {
+  const s = posMod(semi, 12);
+  let best = 0;
+  let bestD = Infinity;
+  steps.forEach((st, i) => {
+    const d = Math.min(Math.abs(s - st), 12 - Math.abs(s - st));
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+/** Motif = scale steps above the current chord root; 'NaN' entries are rests. */
+function makeMotif(len, contourKey, restChance, opts) {
+  const c = CONTOURS[contourKey];
+  const lim = (v) => clamp(v, c.range[0], c.range[1]);
+  let cur = choice(c.start);
+  const m = [];
+  if (c.sequence) {
+    const cell = [];
+    for (let i = 0; i < 4; i++) { cell.push(cur); cur = lim(cur + choice(c.steps)); }
+    for (let i = 0; i < len; i++) m.push(lim(cell[i % 4] + c.sequence * Math.floor(i / 4)));
+  } else {
+    for (let i = 0; i < len; i++) {
+      m.push(cur);
+      cur = lim(i === 0 && c.leap ? m[0] + c.leap : cur + choice(c.steps));
+    }
+    if (len >= 8 && chance(0.6)) for (let i = 0; i < len / 2 - 2; i++) m[len / 2 + i] = m[i];
+  }
+  const fixed = new Set();
+  if (opts.appoggiatura) {
+    for (const p of [0, len / 2]) { m[p] = 3; m[p + 1] = 2; fixed.add(p).add(p + 1); }
+  }
+  return m.map((v, i) => (i > 0 && !fixed.has(i) && chance(restChance * 0.5) ? 'NaN' : v));
+}
+
+/* ----- Devices: named techniques with a psychological rationale ----- */
+const DEVICES = {
+  appoggiatura: {
+    pre: (g) => { g.motifOpts.appoggiatura = true; },
+    why: note('倚音（アッポジャトゥーラ）', '和音が変わる瞬間に和音外の音（4度）を置き、3度へ下行解決させる。Slobodaの調査で「涙」を最も多く誘発した構造。', 'sloboda'),
+  },
+  padUnder: {
+    post: (g) => g.add({ expr: g.chordToneExpr(1, -12), wave: 'strings', env: 'hold', vol: 0.2 }, 6, 'pad'),
+    why: note('持続するストリングス', '人の声に近い滑らかな持続音は「情動伝染」を起こしやすい（聴き手が表情を模倣するように感情を受け取る）。', 'juslin08'),
+  },
+  tapeWow: {
+    post: (g) => { g.lead.expr += ' + 0.12*sin(2*pi*0.7*t)'; },
+    why: note('テープの揺れ', '古い録音のような微小な音程の揺れ：過去の記憶の音として「エピソード記憶」を呼び起こす。', 'juslin08'),
+  },
+  breath: {
+    post: (g) => {
+      const period = Math.round((BREATH_SEC * g.bpm) / 60);
+      for (const l of g.layers) if (l.role === 'pad') l.amp = mulAmp(l.amp, `(0.55 + 0.45*sin(2*pi*x/${period}))`);
+    },
+    why: note('呼吸のゆらぎ（約10秒周期）', 'パッドの音量を毎分約6回のゆっくりした周期で膨らませる。遅い呼吸リズムへの同調はリラックスと結びつく。', 'bernardi'),
+  },
+  waves: {
+    post: (g) => {
+      const period = Math.round((BREATH_SEC * g.bpm) / 60);
+      g.add({ expr: `-4 + 6*sin(2*pi*x/${period * 2})`, amp: `0.25 + 0.2*sin(2*pi*x/${period})`, wave: 'noise', env: 'hold', vol: 0.3 }, 5, 'ambience');
+    },
+    why: note('波・風の環境音', '自然音のゆるやかで不規則なゆらぎ（1/f的）は「心地よい」と感じられやすい。', 'voss'),
+  },
+  shimmer: {
+    post: (g) => g.add({ expr: g.arpExpr('pick(floor(x*4), 0, 2, 1, 3, 2, 3, 1, 2)', 12), wave: 'musicbox', env: '4', vol: 0.12 }, 5, 'shimmer'),
+    why: note('高音のきらめき', '高音域の細かな分散和音は光・魔法の「視覚的イメージ」を喚起する。', 'juslin08'),
+  },
+  lowRegister: {
+    why: note('低い音域・狭い音程', '悲しい主題は統計的に音高が低く、音程の幅が狭い（ため息や沈んだ声の特徴に近い）。', 'huron08'),
+  },
+  fanfare: {
+    post: (g) => { g.lead.vol = 0.36; },
+    why: note('ファンファーレ', '上行4度の呼びかけと行進のリズム：集団の前進・決意・勝利の連想。', 'gabrielsson'),
+  },
+  ticking: {
+    post: (g) => g.add({ expr: 'frac(x) < 0.5 ? 60 : 56', wave: 'noise', env: '2s', vol: 0.12 }, 5, 'drum'),
+    why: note('時計の刻み', '一定の刻みは時間切迫を意識させ、「次に何かが起きる」予期を保ち続ける（ITPRAの緊張反応）。', 'huron06'),
+  },
+  shepard: {
+    post: (g) => g.add({ expr: '12*frac(x/8)', wave: 'shepard', env: 'hold', vol: 0.22 }, 6, 'device'),
+    why: note('シェパード音（終わらない上昇）', 'オクターブ違いの成分を重みづけして、永遠に上がり続けて聞こえる錯覚。解決しない上昇＝緊張の持続（映画『ダンケルク』）。', 'shepard'),
+  },
+  detune: {
+    post: (g) => {
+      const target = g.layers.find((l) => l.role === 'pad') ?? g.lead;
+      target.expr = `(${target.expr}) + 0.35`;
+    },
+    why: note('わずかな音程のズレ', '0.35半音ずらした層がうなり（ビート）を生む。調和性が崩れた響きは一貫して不快と評定される。', 'mcdermott'),
+  },
+  irregular: {
+    pre: (g) => { g.forceRate = 1.5; },
+    why: note('ずれたリズム（3対2）', '拍とかみ合わないリズムで次の音のタイミングが予測しにくい＝予期の失敗が落ち着かなさを生む。', 'huron06'),
+  },
+  clusterDrone: {
+    post: (g) => g.add({ expr: `${g.root - 24}`, amp: '0.45 + 0.35*sin(pi*x/8)', wave: 'cluster', env: 'hold', vol: 0.38 }, 7, 'device'),
+    why: note('不協和クラスターの持続音', '半音と三全音を重ねた低音：臨界帯域内の周波数が干渉し「ラフネス（ザラつき）」を生む＝感覚的不協和。', 'plomp'),
+  },
+  heartbeat: {
+    post: (g) => g.add({
+      expr: '-42 + 4*exp(-30*frac(x))',
+      amp: 'frac(x) < 0.16 ? exp(-28*frac(x)) : 0.7*exp(-28*(frac(x) - 0.16))',
+      wave: 'sine', env: 'hold', vol: 0.9,
+    }, 6, 'device'),
+    why: note('心臓の鼓動', '低音のドクン・ドクンに身体のリズムが同調する（リズム同調）。テンポを上げると不安が増す。', 'juslin08'),
+  },
+  scream: {
+    post: (g) => g.add({
+      expr: `${g.root + 24} + 3*sin(pi*x*0.7) + pick(floor(x/4), 0, 1, 6, -1)`,
+      amp: 'pick(floor(x/2), 0, 0, 0, 1, 0, 0, 1, 0)*(1 - frac(x/2))',
+      wave: 'rough', env: 'hold', vol: 0.3,
+    }, 6, 'device'),
+    why: note('悲鳴質の高音（ラフネス＋非線形）', '30〜150Hzの振幅変調（ラフネス）は人の悲鳴の特徴で、扁桃体を強く駆動する。不規則な音程の跳躍は映画音楽で恐怖を高める。', 'arnal'),
+  },
+  brokenLullaby: {
+    pre: (g) => { g.leadWave = 'musicbox'; },
+    post: (g) => { g.lead.expr += ' + 0.3*sin(pi*x/3)'; },
+    why: note('歪んだ子守唄', '子守唄的な単純で穏やかな旋律を、音程の狂ったオルゴールで鳴らす。安心の記号と異常の対比が不気味さを生む。', 'trehub'),
+  },
+};
+
+const EmotionGen = (() => {
+  const ARP_ORDERS = ['mod(floor(x*4), 4)', 'pick(floor(x*4), 0, 1, 2, 3, 2, 1)', 'pick(floor(x*2), 0, 2, 1, 3)', 'pick(floor(x*4), 0, 2, 1, 3)'];
+
+  function makeContext(E, v, a, opts) {
+    const scaleKey = choice(E.scales);
+    const scale = SCALES[scaleKey];
+    const prog = PROGS[choice(E.progs)];
+    const bpm = Math.round(clamp(rint(E.bpm[0], E.bpm[1]) + (a - E.a) * 30, 50, 190));
+    const root = clamp(rint(-3, 3) + (E.register ?? 0) + Math.round(v * 1.5), ROOT_MIN, ROOT_MAX);
+    const g = {
+      E, v, a, opts, scale, scaleKey, prog, bpm, root, layers: [], notes: [], motifOpts: {}, forceRate: 0, leadWave: null, lead: null,
+      reverb: clamp(E.reverb - 0.1 * (a - E.a), 0, 1),
+      note(n) { this.notes.push(n); },
+      add(spec, priority, role) { const l = { ...spec, priority, role }; this.layers.push(l); return l; },
+      noteOf(deg) { return root + scale.steps[posMod(deg, scale.steps.length)] + 12 * Math.floor(deg / scale.steps.length); },
+      chordTones(i) {
+        const [semi, q] = prog.chords[i];
+        const tones = CHORD_TONES[q].map((t) => root + semi + t);
+        return tones.length >= 4 ? tones.slice(0, 4) : [...tones, tones[0] + 12];
+      },
+      perBar(values) { return `pick(floor(x/4), ${values.join(', ')})`; },
+      chordToneExpr(idx, octave) { return this.perBar(prog.chords.map((_, i) => this.chordTones(i)[idx] + octave)); },
+      arpExpr(order, octave) {
+        const tones = prog.chords.flatMap((_, i) => this.chordTones(i).map((t) => t + octave));
+        return `pick(4*floor(x/4) + ${order}, ${tones.join(', ')})`;
+      },
+      bassNote(semi) {
+        const n = root + posMod(semi, 12) - 24;
+        return n > root - 18 ? n - 12 : n;
+      },
+    };
+    return g;
+  }
+
+  function leadLayer(g) {
+    const { E, scale } = g;
+    const n = scale.steps.length;
+    const R = g.forceRate || choice(E.rate);
+    const q = `floor(x*${R})`;
+    const lo = -n;
+    const notes = Array.from({ length: 4 * n }, (_, i) => g.noteOf(lo + i));
+    const chordIdx = g.prog.chords.map(([semi]) => degreeOf(scale.steps, semi) - lo);
+    const contour = choice(E.contour);
+    const motif = makeMotif(R >= 4 ? 16 : 8, contour, E.rest, g.motifOpts);
+    const legato = g.a < -0.3;
+    const env = legato ? 'hold' : R >= 4 ? '4' : R >= 2 ? '2' : '1';
+    const wave = g.leadWave ?? choice(E.lead);
+    g.lead = g.add({
+      expr: `pick(pick(${q}, ${motif.join(', ')}) + ${g.perBar(chordIdx)}, ${notes.join(', ')})`,
+      wave, env, vol: 0.32,
+    }, 10, 'lead');
+    g.note(CONTOURS[contour].why);
+    const bright = BRIGHT_TIMBRES.has(wave);
+    g.note(note(
+      `音色と奏法：${INSTRUMENTS[wave].label}・${legato ? 'レガート' : 'スタッカート気味'}`,
+      `${bright ? '倍音の多い明るい音色は覚醒・力強さ・攻撃性' : '倍音の少ない柔らかい音色は優しさ・悲しみ・安らぎ'}と結びつく。${legato ? '音をつなげるレガートは穏やか・悲しみ' : '短く切る奏法は活発・喜び・緊張'}の手掛かり。`,
+      'juslin03',
+    ));
+  }
+
+  function harmonyLayer(g) {
+    const h = g.E.harmony;
+    if (!h) return;
+    const wave = choice(h.inst);
+    if (h.type === 'pad') g.add({ expr: g.chordToneExpr(1, -12), wave, env: 'hold', vol: 0.26 }, 7, 'pad');
+    else g.add({ expr: g.arpExpr(choice(ARP_ORDERS), -12), wave, env: '4', vol: 0.24 }, 7, 'arp');
+  }
+
+  function bassLayer(g) {
+    const b = g.E.bass;
+    if (!b) return;
+    const base = g.perBar(g.prog.chords.map(([semi]) => g.bassNote(semi)));
+    const wave = choice(b.inst);
+    const pattern = choice(b.pattern);
+    const spec = {
+      hold:     { expr: base, env: '1', vol: 0.4 },
+      offbeat:  { expr: `frac(x) < 0.5 ? NaN : ${base}`, env: '2', vol: 0.38 },
+      bounce:   { expr: `${base} + 12*(frac(x) >= 0.5)`, env: '2', vol: 0.42 },
+      drive:    { expr: base, env: '2', vol: 0.4 },
+      ostinato: { expr: `${base} + pick(floor(x*2), 0, 0, 0, 1)`, env: '2', vol: 0.4 },
+    }[pattern];
+    g.add({ ...spec, wave }, 8, 'bass');
+    if (pattern === 'ostinato') g.note(note('オスティナート（執拗な反復）', '同じ低音を刻み続け、半音上の音が一瞬だけ混ざる。逃げ場のない反復は緊張を蓄積させる。', 'huron06'));
+  }
+
+  function drumLayers(g) {
+    const set = DRUM_SETS[choice(g.E.drums)];
+    set.kit.forEach((d, i) => g.add({ ...DRUMS[d] }, 4 - i * 0.5, 'drum'));
+    if (set.why) g.note(note('リズム', set.why, 'juslin08'));
+  }
+
+  /** Frisson: build-up, a breath of silence, then a sudden expansion. */
+  function applyClimax(g) {
+    const B = CLIMAX_BEAT;
+    const cresc = `(x < ${B / 2} ? 0.55 : x < ${B - 0.5} ? 0.55 + 0.45*(x - ${B / 2})/${B / 2 - 0.5} : x < ${B} ? 0 : 1)`;
+    for (const l of g.layers) {
+      if (l.role === 'drum') l.expr = `x < ${B} ? NaN : (${l.expr})`;
+      else {
+        if (l.role === 'lead') l.expr = `(${l.expr}) + 12*(x >= ${B})`;
+        l.amp = mulAmp(l.amp, cresc);
+      }
+    }
+    g.add({ expr: `x >= ${B - 6} and x < ${B - 0.5} ? 18 + 30*(x - ${B - 6})/5.5 : NaN`, amp: `(x - ${B - 6})/5.5`, wave: 'noise', env: 'hold', vol: 0.32 }, 5, 'riser');
+    g.note(note('鳥肌（フリッソン）の設計', `${B}拍目でメロディを1オクターブ上げ、ドラムを投入し、音域と音量を一気に広げる。鳥肌反応と最も相関するのは「急な音量増加・音域の拡大・新しい声部の参入」。`, 'guhn'));
+    g.note(note('溜め → 一瞬の静寂 → 解放', `${B / 2}拍目からクレッシェンドし、直前の0.5拍を無音にする。期待が最大になった瞬間に解決させると、報酬系のドーパミン放出が強まる。`, 'salimpoor'));
+    g.note(note('上昇ノイズ（接近音）', '音量と音高が上がり続ける音は「何かが近づいてくる」と知覚され、注意と覚醒を引き上げる。', 'neuhoff'));
+  }
+
+  function trimLayers(g) {
+    while (g.layers.length > MAX_LAYERS) {
+      let min = 0;
+      g.layers.forEach((l, i) => { if (l.priority < g.layers[min].priority) min = i; });
+      g.layers.splice(min, 1);
+    }
+  }
+
+  function applyPalette(g) {
+    if (g.opts.palette !== 'chip') return;
+    for (const l of g.layers) {
+      if (l.wave === 'noise' || l.wave === 'shepard') continue;
+      if (l.role === 'bass') l.wave = 'triangle';
+      else if (l.role === 'lead') l.wave = choice(['pulse25', 'square']);
+      else l.wave = 'pulse12';
+    }
+    g.reverb = Math.min(g.reverb, 0.2);
+    g.note(note('8bit 音色', 'ゲーム機の音色そのものが「ゲームの記憶」と結びついた評価条件付けの手掛かりになる。', 'juslin08'));
+  }
+
+  function generate({ v, a, climax = false, palette = 'auto' }) {
+    const key = nearestEmotion(v, a);
+    const E = EMOTIONS[key];
+    const g = makeContext(E, v, a, { palette });
+    const devices = E.devices.map((d) => DEVICES[d]);
+
+    g.note(note(
+      `感情の座標：快 ${v >= 0 ? '+' : ''}${v.toFixed(2)} / 覚醒 ${a >= 0 ? '+' : ''}${a.toFixed(2)}`,
+      `感情の円環モデル上で「${E.label}」の領域。音楽が喚起する感情の分類（GEMS）では「${E.gems}」に近い。以下はこの領域で研究上もっとも一貫して報告されている手掛かりの組み合わせ。`,
+      'russell',
+    ));
+    g.note(note(
+      `テンポ ${g.bpm} BPM`,
+      `テンポは覚醒度を最も強く左右する手掛かり。${g.bpm < 80 ? '安静時の心拍（60〜80）付近以下：鎮静的。' : g.bpm > 120 ? '心拍より明らかに速い：高揚・興奮。' : '歩くような中庸の速さ。'}`,
+      'gabrielsson',
+    ));
+    g.note(g.scale.why);
+    g.note(note(`和声：${g.prog.name}`, g.prog.why, g.prog.r));
+
+    devices.forEach((d) => d.pre?.(g));
+    leadLayer(g);
+    harmonyLayer(g);
+    bassLayer(g);
+    drumLayers(g);
+    devices.forEach((d) => { d.post?.(g); g.note(d.why); });
+
+    const length = climax ? CLIMAX_BEAT * 2 : 16;
+    if (climax) applyClimax(g);
+    applyPalette(g);
+    trimLayers(g);
+    g.note(note(
+      `残響 ${Math.round(g.reverb * 100)}%`,
+      g.reverb > 0.5 ? '広い空間の響き：孤独・崇高・神秘の「視覚的イメージ」を強める。' : '乾いた近い音：親密さ・切迫感・現実感。',
+      'juslin08',
+    ));
+
+    const keyName = noteName(g.root).replace(/-?\d+$/, '');
+    return {
+      name: `${E.label} · ${keyName} ${g.scale.name} · ${g.bpm}BPM${climax ? ' · クライマックス' : ''}`,
+      bpm: g.bpm, length, loop: true, reverb: Number(g.reverb.toFixed(2)), emotion: key,
+      layers: g.layers.map(({ priority, role, ...spec }) => spec),
+      notes: g.notes,
+    };
+  }
+
+  return { generate };
+})();
+
+/* ======================================================================
+ * Sound-effect generator (one-shots, x/t in seconds at 240 BPM)
+ * ==================================================================== */
+const SFX_BPM = 240;
+
+function sfxSong(name, dur, reverb, layers, notes, loop = false) {
+  return {
+    name: `SFX · ${name}`, bpm: SFX_BPM, length: Math.max(1, Math.ceil((dur * SFX_BPM) / 60)),
+    loop, reverb, layers: layers.map((l) => ({ env: 'hold', ...l })), notes,
+  };
+}
+
+const SFX = [
+  { group: '快・報酬', label: 'コイン', make() {
+    const p = rint(12, 19);
+    return sfxSong('コイン', 0.6, 0.15, [
+      { expr: `t < 0.07 ? ${p} : ${p + choice([5, 7])}`, amp: 'exp(-7*max(t - 0.07, 0))', wave: choice(['pulse25', 'square']), vol: 0.5 },
+    ], [note('短い上行・協和音程', '上行する完全4度/5度は「成功・獲得」の合図。ゲーム内で報酬と反復して結びつくことで快の反応が強化される（評価条件付け）。', 'juslin08')]);
+  } },
+  { group: '快・報酬', label: 'ジャンプ', make() {
+    const p = rint(-6, 2);
+    return sfxSong('ジャンプ', 0.3, 0.1, [
+      { expr: `${p} + 40*t`, amp: 't < 0.2 ? 1 - t/0.2 : 0', wave: choice(['square', 'pulse25']), vol: 0.45 },
+    ], [note('上昇グリッサンド', '音高の上昇は物理的な上昇・軽さと結びつく（音高と空間の対応）。', 'gabrielsson')]);
+  } },
+  { group: '快・報酬', label: 'レベルアップ', make() {
+    const b = rint(0, 7);
+    return sfxSong('レベルアップ', 1.5, 0.35, [
+      { expr: `pick(min(floor(t*14), 6), 0, 4, 7, 12, 16, 19, 24) + ${b}`, amp: 't < 0.5 ? 1 : exp(-3*(t - 0.5))', wave: 'pulse25', vol: 0.45 },
+      { expr: `${b - 12} + 12*(t > 0.5)`, amp: 'exp(-2*t)', wave: 'triangle', vol: 0.45 },
+    ], [note('長三和音の上行アルペジオ', '長和音の構成音を駆け上がる：達成・成長の比喩。長調＋上行＋速い動きは「喜び」の手掛かりの組み合わせ。', 'gabrielsson')]);
+  } },
+  { group: '快・報酬', label: '回復', make() {
+    const b = rint(0, 7);
+    return sfxSong('回復', 1.3, 0.55, [
+      { expr: `${b} + 14*t + 0.25*sin(2*pi*6*t)`, amp: 'sin(pi*min(t/1.2, 1))', wave: 'sine', vol: 0.45 },
+      { expr: `${b + 24} + pick(floor(t*10), 0, 4, 7, 11, 14)`, amp: 'exp(-2*t)', wave: 'bell', vol: 0.2 },
+    ], [note('上昇＋ビブラート', 'ゆっくり浮かび上がる音と6Hz前後のビブラート（声の温かみ）。声に似た特徴は情動伝染を起こしやすい。', 'juslin08')]);
+  } },
+  { group: '快・報酬', label: '勝利ジングル', make() {
+    const b = rint(-2, 5);
+    return sfxSong('勝利ジングル', 2.2, 0.35, [
+      { expr: `pick(min(floor(t*7), 6), 0, 0, 0, 5, 9, 7, 12) + ${b}`, amp: 't > 0.85 ? exp(-1.2*(t - 0.85)) : (frac(t*7) < 0.75)', wave: choice(['supersaw', 'pulse25']), vol: 0.4 },
+      { expr: `${b - 24} + pick(min(floor(t*3.5), 3), 0, 5, 7, 0)`, amp: 'exp(-0.8*t)', wave: 'triangle', vol: 0.45 },
+    ], [note('ファンファーレ', '同音連打 → 上行4度 → 主音のオクターブ上で終止。長調の主和音への到達＝勝利・完結。', 'huron06')]);
+  } },
+  { group: '快・報酬', label: '決定・選択', make() {
+    const p = rint(10, 18);
+    return sfxSong('決定', 0.25, 0.1, [
+      { expr: `${p} + 7*(t > 0.04)`, amp: 'exp(-25*t)', wave: choice(['sine', 'epiano']), vol: 0.5 },
+    ], [note('短く高い協和音', '注意を引くが不快でない最小限の合図。耳障りにならないよう減衰を速くする。', 'mcdermott')]);
+  } },
+  { group: '驚異・神秘', label: '発見', make() {
+    const b = rint(0, 6);
+    return sfxSong('発見', 2.8, 0.75, [
+      { expr: `pick(min(floor(t*8), 5), 0, 7, 14, 18, 21, 26) + ${b}`, amp: 'exp(-0.9*t)', wave: 'bell', vol: 0.4 },
+      { expr: `${b - 12}`, amp: 'sin(pi*min(t/2.8, 1))', wave: 'choir', vol: 0.3 },
+    ], [note('リディアンの♯4', '♯4（増4度）を含む上行と広い残響：「魔法・神秘」の映画的慣習。広い空間の響きは視覚的イメージを喚起する。', 'zentner')]);
+  } },
+  { group: '不快・危険', label: 'ダメージ', make() {
+    const b = rint(0, 8);
+    return sfxSong('ダメージ', 0.5, 0.15, [
+      { expr: `${b} - 28*t`, amp: 'exp(-6*t)', wave: 'rough', vol: 0.5 },
+      { expr: '30 - 20*t', amp: 'exp(-14*t)', wave: 'noise', vol: 0.5 },
+    ], [note('下降＋ラフネス', '急な下行は落下・損失の比喩。振幅のザラつき（ラフネス）は警告・苦痛の音として即座に知覚される。', 'arnal')]);
+  } },
+  { group: '不快・危険', label: 'エラー・ブザー', make() {
+    return sfxSong('エラー', 0.5, 0.1, [
+      { expr: `${rint(-16, -10)}`, amp: '(frac(t*6) < 0.55)*(t < 0.42)', wave: 'cluster', vol: 0.5 },
+    ], [note('不協和クラスター', '半音でぶつかる低い音の塊は感覚的不協和が最大になる＝「拒否・失敗」の合図。', 'plomp')]);
+  } },
+  { group: '不快・危険', label: '警報（接近）', make() {
+    return sfxSong('警報', 2.5, 0.25, [
+      { expr: '14 + 7*sin(2*pi*1.6*t)', amp: 'min(1, 0.25 + 0.4*t)', wave: 'square', vol: 0.35 },
+      { expr: '14.5 + 7*sin(2*pi*1.6*t)', amp: 'min(1, 0.25 + 0.4*t)', wave: 'rough', vol: 0.2 },
+    ], [note('サイレン＋クレッシェンド', '音量が上がり続ける音は「接近してくる危険」と過大評価される（ルーミング・バイアス）。半音未満ずれた2音のうなりが不快さを足す。', 'neuhoff')], true);
+  } },
+  { group: '恐怖・緊張', label: 'ジャンプスケア', make() {
+    return sfxSong('ジャンプスケア', 2.2, 0.6, [
+      { expr: `${rint(-10, -6)} - 3*t`, amp: 'exp(-1.1*t)', wave: 'cluster', vol: 0.7 },
+      { expr: '44 - 10*t', amp: 'exp(-3*t)', wave: 'noise', vol: 0.6 },
+      { expr: `${rint(26, 32)} + 5*sin(2*pi*9*t) - 8*t`, amp: 'exp(-1.6*t)', wave: 'rough', vol: 0.4 },
+    ], [
+      note('脳幹反射を突く', '突然・大音量・広帯域・不協和の音は、意味を理解する前に驚愕反射を起こす。直前に静寂を置くと効果が最大になる。', 'juslin08'),
+      note('非線形な音', 'ノイズ・急な音高変化・ザラつきは動物の警戒声の特徴で、映画音楽でも恐怖を強める。', 'blumstein'),
+    ]);
+  } },
+  { group: '恐怖・緊張', label: '心臓の鼓動', make() {
+    const hz = choice([1.2, 1.4, 1.6]);
+    return sfxSong('心臓の鼓動', 4 / hz, 0.2, [
+      { expr: `-40 + 5*exp(-30*frac(t*${hz}))`, amp: `frac(t*${hz}) < 0.15 ? exp(-25*frac(t*${hz})) : 0.7*exp(-25*(frac(t*${hz}) - 0.15))`, wave: 'sine', vol: 0.95 },
+    ], [note(`鼓動 ${Math.round(hz * 60)} 回/分`, '聴き手の身体リズムは外部の拍に引き込まれる（リズム同調）。安静時より速い鼓動は不安・緊張を高める。', 'juslin08')], true);
+  } },
+  { group: '恐怖・緊張', label: '不穏な風', make() {
+    return sfxSong('不穏な風', 6, 0.6, [
+      { expr: '8 + 10*sin(2*pi*0.23*t) + 4*sin(2*pi*0.61*t)', amp: '0.5 + 0.35*sin(2*pi*0.17*t)', wave: 'noise', vol: 0.5 },
+      { expr: `${rint(-32, -26)}`, amp: '0.4 + 0.2*sin(2*pi*0.11*t)', wave: 'cluster', vol: 0.35 },
+    ], [note('うごめく低音と風', '周期の合わない複数のゆらぎで予測できない動きを作り、低い不協和音で「見えない何か」を暗示する。', 'huron06')], true);
+  } },
+  { group: '恐怖・緊張', label: '無限上昇', make() {
+    return sfxSong('無限上昇', 6, 0.4, [
+      { expr: '12*frac(t/3)', amp: 'min(1, t/1.5)', wave: 'shepard', vol: 0.6 },
+    ], [note('シェパード・トーン', '永遠に上がり続ける錯覚。解決しない上昇は緊張を持続させる（ループで使える）。', 'shepard')], true);
+  } },
+  { group: '悲しみ', label: 'ゲームオーバー', make() {
+    const b = rint(-6, 2);
+    return sfxSong('ゲームオーバー', 2.9, 0.4, [
+      { expr: `t < 1.5 ? pick(floor(t*2), 0, -1, -2) + ${b} : ${b - 3} + 0.35*sin(2*pi*5*t) - 1.2*(t - 1.5)`, amp: 't < 1.5 ? 0.9 : max(0, 1 - (t - 1.5)/1.3)', wave: choice(['strings', 'sawtooth']), vol: 0.45 },
+    ], [note('半音ずつ下がる「ため息」', '半音下行はため息の音型。低く、狭く、遅く下がっていく旋律は悲しみの典型的な特徴。', 'huron08')]);
+  } },
+];
+
+/* ======================================================================
+ * Expression engine (math.js, sandboxed)
+ * ==================================================================== */
+const Expr = !window.math ? null : (() => {
+  // Music-friendly helper functions available inside formulas.
+  math.import({
+    frac: fracPart,
+    pick: (i, ...vals) => (vals.length ? vals[posMod(Math.floor(i), vals.length)] : NaN),
+    tri: (v) => 1 - 4 * Math.abs(fracPart(v + 0.25) - 0.5),
+    saw: (v) => 2 * fracPart(v) - 1,
+    sqr: (v) => (fracPart(v) < 0.5 ? 1 : -1),
+    clamp: (v, lo, hi) => clamp(v, lo, hi),
+  });
+
+  // Keep our own reference to parse, then disable functions that could be abused
+  // from inside user formulas (per math.js security guidance).
+  const parse = math.parse;
+  const disabled = (name) => () => { throw new Error(`${name} is disabled`); };
+  math.import({
+    import: disabled('import'),
+    createUnit: disabled('createUnit'),
+    evaluate: disabled('evaluate'),
+    parse: disabled('parse'),
+    simplify: disabled('simplify'),
+    derivative: disabled('derivative'),
+    resolve: disabled('resolve'),
+  }, { override: true });
+
+  // Coerce any math.js result to a plain number (NaN = rest).
+  function toNumber(r) {
+    if (typeof r === 'number') return Number.isFinite(r) ? r : NaN;
+    if (typeof r === 'boolean') return r ? 1 : 0;
+    if (r && Array.isArray(r.entries)) return r.entries.length ? toNumber(r.entries[r.entries.length - 1]) : NaN;
+    return NaN;
+  }
+
+  function compile(src) {
+    if (!src.trim()) throw new Error('数式が空です');
+    const node = parse(src);
+    const code = node.compile();
+    code.evaluate({ x: 0.5, t: 0.25 }); // probe: surfaces undefined symbols etc.
+    let warned = false;
+    const fn = (x, t) => {
+      try {
+        return toNumber(code.evaluate({ x, t }));
+      } catch (err) {
+        if (!warned) { console.warn(`[GraphSynth] runtime error in "${src}" at x=${x}:`, err); warned = true; }
+        return NaN;
+      }
+    };
+    return { node, fn };
+  }
+
+  const unwrap = (n) => (n && n.type === 'ParenthesisNode' ? unwrap(n.content) : n);
+
+  // Custom LaTeX: nested ternaries become a cases block, NaN becomes "rest".
+  function texHandler(node, options) {
+    if (node.type === 'ConditionalNode') {
+      const rows = [];
+      let cur = node;
+      while (cur && cur.type === 'ConditionalNode') {
+        rows.push(`${unwrap(cur.trueExpr).toTex(options)} & \\text{if } ${unwrap(cur.condition).toTex(options)}`);
+        cur = unwrap(cur.falseExpr);
+      }
+      rows.push(`${cur.toTex(options)} & \\text{otherwise}`);
+      return `\\begin{cases} ${rows.join(' \\\\ ')} \\end{cases}`;
+    }
+    if ((node.type === 'SymbolNode' && node.name === 'NaN') || (node.type === 'ConstantNode' && Number.isNaN(node.value))) return '\\text{rest}';
+    return undefined;
+  }
+
+  function toTex(node) {
+    try {
+      return node.toTex({ parenthesis: 'keep', implicit: 'hide', handler: texHandler });
+    } catch (err) {
+      console.warn('[GraphSynth] toTex failed:', err);
+      return '\\text{?}';
+    }
+  }
+
+  return { compile, toTex };
+})();
+
+/* ======================================================================
+ * App state
+ * ==================================================================== */
+const state = { name: '', bpm: 120, length: 16, loop: true, volume: 0.7, reverb: 0.3, emotion: '', notes: [], layers: [] };
+const view = { y0: -12, y1: 12 };
+let layerSeq = 0;
+
+const beatsToSec = (b) => (b * 60) / state.bpm;
+
+function makeLayer(spec) {
+  const layer = {
+    id: ++layerSeq,
+    expr: String(spec.expr ?? '0'),
+    amp: String(spec.amp ?? ''),
+    wave: INSTRUMENTS[spec.wave] ? spec.wave : 'sine',
+    env: ENVELOPES[spec.env] ? spec.env : 'hold',
+    vol: clamp(Number(spec.vol ?? 0.5) || 0, 0, 1),
+    muted: !!spec.muted,
+    fn: null, node: null, error: '', ampFn: null, ampNode: null, ampError: '', debounce: 0,
+  };
+  compileLayer(layer);
+  compileAmp(layer);
+  return layer;
+}
+
+function compileLayer(layer) {
+  try {
+    const { node, fn } = Expr.compile(layer.expr);
+    layer.node = node;
+    layer.fn = fn;
+    layer.error = '';
+  } catch (err) {
+    layer.error = err.message; // keep last valid fn/node so playback continues
+  }
+}
+
+function compileAmp(layer) {
+  if (!layer.amp.trim()) {
+    Object.assign(layer, { ampFn: null, ampNode: null, ampError: '' });
+    return;
+  }
+  try {
+    const { node, fn } = Expr.compile(layer.amp);
+    Object.assign(layer, { ampFn: fn, ampNode: node, ampError: '' });
+  } catch (err) {
+    layer.ampError = `a(x): ${err.message}`;
+  }
+}
+
+const isDrumLayer = (layer) => INSTRUMENTS[layer.wave]?.kind === 'noise';
+
+const evalLayer = (layer, beat) => (layer.fn ? layer.fn(beat, beatsToSec(beat)) : NaN);
+
+function envelopeAt(env, beat) {
+  const { div, decay } = ENVELOPES[env];
+  return div ? Math.exp(-decay * fracPart(beat * div)) : 1;
+}
+
+/* ======================================================================
+ * Audio engine
+ * Voices are built against any BaseAudioContext, so the same code drives
+ * live playback (AudioContext) and file export (OfflineAudioContext).
+ * ==================================================================== */
+const audio = { ctx: null, master: null, analyser: null, voices: [] };
+const ctxCache = new WeakMap(); // ctx -> { waves: Map, noise: AudioBuffer }
+
+function cacheFor(ctx) {
+  if (!ctxCache.has(ctx)) ctxCache.set(ctx, { waves: new Map(), noise: null });
+  return ctxCache.get(ctx);
+}
+
+function periodicWaveFor(ctx, key) {
+  const cache = cacheFor(ctx).waves;
+  if (!cache.has(key)) {
+    const real = Float32Array.from(INSTRUMENTS[key].harmonics);
+    cache.set(key, ctx.createPeriodicWave(real, new Float32Array(real.length)));
+  }
+  return cache.get(key);
+}
+
+function noiseBufferFor(ctx) {
+  const cache = cacheFor(ctx);
+  if (!cache.noise) {
+    const buf = ctx.createBuffer(1, Math.round(ctx.sampleRate * NOISE_BUFFER_SEC), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    cache.noise = buf;
+  }
+  return cache.noise;
+}
+
+/** Synthetic room impulse: stereo noise with a power-law decay. */
+function impulseFor(ctx) {
+  const cache = cacheFor(ctx);
+  if (!cache.ir) {
+    const len = Math.round(ctx.sampleRate * REVERB_SEC);
+    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const data = ir.getChannelData(c);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, REVERB_DECAY);
+    }
+    cache.ir = ir;
+  }
+  return cache.ir;
+}
+
+/**
+ * Master bus: gain -> (dry + convolution reverb) -> compressor -> destination.
+ * Returns the input node and a setter for the reverb amount.
+ */
+function buildMasterChain(ctx, destination, volume, reverb) {
+  const master = ctx.createGain();
+  master.gain.value = volume;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -10;
+  comp.ratio.value = 4;
+  comp.connect(destination);
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  const conv = ctx.createConvolver();
+  conv.buffer = impulseFor(ctx);
+  master.connect(dry).connect(comp);
+  master.connect(conv).connect(wet).connect(comp);
+  const setReverb = (amt) => {
+    dry.gain.value = 1 - amt * 0.4;
+    wet.gain.value = amt * REVERB_WET_MAX;
+  };
+  setReverb(reverb);
+  return { input: master, setReverb };
+}
+
+function ensureAudio() {
+  if (!audio.ctx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.connect(ctx.destination);
+    const chain = buildMasterChain(ctx, analyser, state.volume, state.reverb);
+    Object.assign(audio, { ctx, analyser, master: chain.input, setReverb: chain.setReverb });
+  }
+  if (audio.ctx.state === 'suspended') audio.ctx.resume();
+}
+
+/**
+ * Builds one instrument voice. `freqParams` lists [AudioParam, multiplier] pairs
+ * that follow the note frequency (oscillators, filters, FM depth).
+ */
+function buildVoice(ctx, dest, instKey, startTime) {
+  const inst = INSTRUMENTS[instKey] ?? INSTRUMENTS.sine;
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0, startTime);
+  out.connect(dest);
+  const sources = [];
+  const freqParams = [];
+  const maxHz = Math.min(FILTER_MAX_HZ, ctx.sampleRate / 2 - 100);
+  let onFreq = null;
+  const newOsc = () => { const o = ctx.createOscillator(); sources.push(o); return o; };
+
+  switch (inst.kind) {
+    case 'rough': {
+      // Amplitude modulation in the 30–150 Hz "roughness" band (scream-like)
+      const osc = newOsc();
+      osc.type = inst.type;
+      const am = ctx.createGain();
+      am.gain.value = 1 - inst.depth / 2;
+      const lfo = newOsc();
+      lfo.frequency.value = inst.amHz;
+      const lfoDepth = ctx.createGain();
+      lfoDepth.gain.value = inst.depth / 2;
+      lfo.connect(lfoDepth).connect(am.gain);
+      osc.connect(am).connect(out);
+      freqParams.push([osc.frequency, 1]);
+      break;
+    }
+    case 'shepard': {
+      // Octave-spaced sines under a fixed bell-shaped spectral envelope
+      const mix = ctx.createGain();
+      mix.connect(out);
+      const partials = [];
+      for (let k = -SHEPARD_SPAN; k <= SHEPARD_SPAN; k++) {
+        const osc = newOsc();
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, startTime);
+        osc.connect(g).connect(mix);
+        partials.push({ osc, g, k });
+      }
+      onFreq = (freq, time, jump) => {
+        for (const p of partials) {
+          const f = freq * Math.pow(2, p.k);
+          const pos = Math.log2(f / SHEPARD_CENTER_HZ) / SHEPARD_SIGMA;
+          const w = f < FREQ_MIN || f > maxHz ? 0 : Math.exp(-0.5 * pos * pos) * 0.5;
+          const hz = clamp(f, FREQ_MIN, maxHz);
+          if (jump) { p.osc.frequency.setValueAtTime(hz, time); p.g.gain.setValueAtTime(w, time); }
+          else { p.osc.frequency.linearRampToValueAtTime(hz, time); p.g.gain.linearRampToValueAtTime(w, time); }
+        }
+      };
+      break;
+    }
+    case 'wave': {
+      const osc = newOsc();
+      osc.setPeriodicWave(periodicWaveFor(ctx, instKey));
+      osc.connect(out);
+      freqParams.push([osc.frequency, 1]);
+      break;
+    }
+    case 'detune': {
+      let target = out;
+      if (inst.lowpass) {
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.Q.value = 0.7;
+        lp.connect(out);
+        freqParams.push([lp.frequency, inst.lowpass]);
+        target = lp;
+      }
+      const mix = ctx.createGain();
+      mix.gain.value = 1 / inst.cents.length;
+      mix.connect(target);
+      for (const cents of inst.cents) {
+        const osc = newOsc();
+        osc.type = inst.type;
+        osc.detune.value = cents;
+        osc.connect(mix);
+        freqParams.push([osc.frequency, 1]);
+      }
+      break;
+    }
+    case 'fm': {
+      const carrier = newOsc();
+      const mod = newOsc();
+      const depth = ctx.createGain();
+      mod.connect(depth).connect(carrier.frequency);
+      carrier.connect(out);
+      freqParams.push([carrier.frequency, 1], [mod.frequency, inst.ratio], [depth.gain, inst.index * inst.ratio]);
+      break;
+    }
+    case 'noise': {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBufferFor(ctx);
+      src.loop = true;
+      sources.push(src);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = inst.q;
+      src.connect(bp).connect(out);
+      freqParams.push([bp.frequency, 1]);
+      break;
+    }
+    default: {
+      const osc = newOsc();
+      osc.type = inst.type;
+      osc.connect(out);
+      freqParams.push([osc.frequency, 1]);
+    }
+  }
+  for (const s of sources) s.start(startTime);
+  return { out, sources, freqParams, onFreq, level: inst.level, maxHz, lastY: NaN };
+}
+
+function createVoices(startTime) {
+  audio.voices = state.layers.map((layer) => buildVoice(audio.ctx, audio.master, layer.wave, startTime));
+}
+
+/** Optional per-layer amplitude curve a(x); NaN counts as silence. */
+function ampAt(layer, beat) {
+  if (!layer.ampFn) return 1;
+  const v = layer.ampFn(beat, beatsToSec(beat));
+  return Number.isFinite(v) ? clamp(v, 0, AMP_MAX) : 0;
+}
+
+function destroyVoices() {
+  if (!audio.ctx) return;
+  const now = audio.ctx.currentTime;
+  for (const v of audio.voices) {
+    const g = v.out.gain;
+    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now);
+    else { g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); }
+    g.linearRampToValueAtTime(0, now + VOICE_STOP_SEC);
+    for (const s of v.sources) s.stop(now + VOICE_STOP_SEC + 0.02);
+  }
+  audio.voices = [];
+}
+
+/** Writes pitch/gain automation for one voice at one scheduler step. */
+function scheduleVoice(voice, layer, beat, time, silent) {
+  const y = silent || layer.muted ? NaN : evalLayer(layer, beat);
+  let amp = 0;
+  if (Number.isFinite(y)) {
+    const freq = semitoneToFreq(y);
+    const jump = !Number.isFinite(voice.lastY) || Math.abs(y - voice.lastY) > JUMP_SEMITONES;
+    if (voice.onFreq) voice.onFreq(freq, time, jump);
+    for (const [param, mult] of voice.freqParams) {
+      const v = Math.min(freq * mult, voice.maxHz);
+      if (jump) param.setValueAtTime(v, time);
+      else param.linearRampToValueAtTime(v, time);
+    }
+    amp = layer.vol * envelopeAt(layer.env, beat) * ampAt(layer, beat) * VOICE_HEADROOM * voice.level;
+  }
+  voice.lastY = y;
+  voice.out.gain.linearRampToValueAtTime(amp, time);
+}
+
+/* ======================================================================
+ * Transport (play / pause / seek, audio-clock based)
+ * ==================================================================== */
+const transport = { playing: false, beat: 0, anchorTime: 0, anchorBeat: 0, nextTime: 0, timer: 0 };
+
+const rawBeatAt = (time) => transport.anchorBeat + ((time - transport.anchorTime) * state.bpm) / 60;
+const wrapBeat = (b) => (state.loop ? posMod(b, state.length) : Math.min(b, state.length));
+
+function currentBeat() {
+  if (!transport.playing) return transport.beat;
+  return wrapBeat(Math.max(0, rawBeatAt(audio.ctx.currentTime)));
+}
+
+function schedulerTick() {
+  const horizon = audio.ctx.currentTime + LOOKAHEAD_SEC;
+  while (transport.nextTime < horizon) {
+    const raw = rawBeatAt(transport.nextTime);
+    const silent = !state.loop && raw >= state.length;
+    const beat = wrapBeat(raw);
+    audio.voices.forEach((v, i) => state.layers[i] && scheduleVoice(v, state.layers[i], beat, transport.nextTime, silent));
+    transport.nextTime += SCHED_STEP_SEC;
+  }
+}
+
+function startAt(beat) {
+  const start = audio.ctx.currentTime + START_DELAY_SEC;
+  Object.assign(transport, { anchorTime: start, anchorBeat: beat, nextTime: start });
+  createVoices(start);
+  schedulerTick();
+}
+
+function play() {
+  ensureAudio();
+  if (transport.beat >= state.length) transport.beat = 0;
+  transport.playing = true;
+  startAt(transport.beat);
+  transport.timer = setInterval(schedulerTick, SCHED_TICK_MS);
+  updatePlayButton();
+}
+
+function pause() {
+  if (!transport.playing) return;
+  transport.beat = currentBeat();
+  transport.playing = false;
+  clearInterval(transport.timer);
+  destroyVoices();
+  updatePlayButton();
+}
+
+const togglePlay = () => (transport.playing ? pause() : play());
+
+function seek(beat) {
+  const b = clamp(beat, 0, state.length);
+  transport.beat = b;
+  if (transport.playing) {
+    destroyVoices();
+    startAt(b);
+  }
+}
+
+/** Applies a timing change (tempo/loop/length) without a jump in the audio stream. */
+function retime(mutate) {
+  if (!transport.playing) {
+    mutate();
+    transport.beat = Math.min(transport.beat, state.length);
+    return;
+  }
+  const b = wrapBeat(rawBeatAt(transport.nextTime));
+  mutate();
+  transport.anchorTime = transport.nextTime;
+  transport.anchorBeat = wrapBeat(b);
+}
+
+/** Rebuilds oscillators after layers were added/removed during playback. */
+function rebuildVoices() {
+  if (!transport.playing) return;
+  const b = currentBeat();
+  destroyVoices();
+  startAt(b);
+}
+
+/* ======================================================================
+ * Graph rendering
+ * ==================================================================== */
+const graph = {
+  canvas: $('graph'), ctx: $('graph').getContext('2d'),
+  buf: document.createElement('canvas'), w: 0, h: 0, dpr: 1,
+  plot: { l: 0, t: 0, r: 0, b: 0 },
+};
+graph.bctx = graph.buf.getContext('2d');
+
+const xToPx = (x) => graph.plot.l + (x / state.length) * (graph.plot.r - graph.plot.l);
+const yToPx = (y) => graph.plot.b - ((y - view.y0) / (view.y1 - view.y0)) * (graph.plot.b - graph.plot.t);
+const pxToX = (px) => ((px - graph.plot.l) / (graph.plot.r - graph.plot.l)) * state.length;
+
+function resizeGraph() {
+  const rect = graph.canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  graph.dpr = dpr;
+  graph.w = rect.width;
+  graph.h = rect.height;
+  for (const c of [graph.canvas, graph.buf]) {
+    c.width = Math.round(rect.width * dpr);
+    c.height = Math.round(rect.height * dpr);
+  }
+  const narrow = rect.width < 520;
+  graph.plot = { l: narrow ? 34 : 46, t: 14, r: rect.width - (narrow ? 34 : 46), b: rect.height - 28 };
+  renderStatic();
+}
+
+/** Fits the y range to all layers so every curve is visible. */
+function computeRange() {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const layer of state.layers) {
+    if (!layer.fn || isDrumLayer(layer)) continue;
+    for (let k = 0; k <= RANGE_SAMPLES; k++) {
+      const y = evalLayer(layer, (k / RANGE_SAMPLES) * state.length);
+      if (Number.isFinite(y)) { lo = Math.min(lo, y); hi = Math.max(hi, y); }
+    }
+  }
+  if (!Number.isFinite(lo)) { lo = -6; hi = 6; }
+  lo = clamp(lo, -Y_CLAMP, Y_CLAMP);
+  hi = clamp(hi, -Y_CLAMP, Y_CLAMP);
+  const pad = Math.max(2, (hi - lo) * 0.12);
+  let y0 = Math.floor(lo - pad);
+  let y1 = Math.ceil(hi + pad);
+  if (y1 - y0 < MIN_Y_SPAN) {
+    y0 = Math.floor((y0 + y1) / 2 - MIN_Y_SPAN / 2);
+    y1 = y0 + MIN_Y_SPAN;
+  }
+  view.y0 = y0;
+  view.y1 = y1;
+}
+
+const firstFitting = (candidates, unitPx, minPx) => candidates.find((c) => c * unitPx >= minPx) ?? candidates[candidates.length - 1];
+
+function line(ctx, x0, y0, x1, y1) {
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+}
+
+/** Draws grid, axes, labels and curves into the offscreen buffer. */
+function renderStatic() {
+  const { bctx: ctx, plot, dpr } = graph;
+  if (!graph.w) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = GRAPH_COLORS.bg;
+  ctx.fillRect(0, 0, graph.w, graph.h);
+  ctx.font = '11px "JetBrains Mono", monospace';
+  ctx.lineWidth = 1;
+
+  const pxPerBeat = (plot.r - plot.l) / state.length;
+  const pxPerSemi = (plot.b - plot.t) / (view.y1 - view.y0);
+
+  // Vertical grid (time)
+  const sub = pxPerBeat >= 80 ? 0.25 : pxPerBeat >= 40 ? 0.5 : 1;
+  for (let x = 0; x <= state.length + 1e-9; x += sub) {
+    const isBar = Math.abs(x % 4) < 1e-9;
+    const isBeat = Math.abs(x % 1) < 1e-9;
+    if (!isBeat && pxPerBeat < 8) continue;
+    ctx.strokeStyle = isBar ? GRAPH_COLORS.gridMajor : isBeat ? GRAPH_COLORS.gridBeat : GRAPH_COLORS.grid;
+    const px = Math.round(xToPx(x)) + 0.5;
+    line(ctx, px, plot.t, px, plot.b);
+  }
+  const labelEvery = firstFitting([1, 2, 4, 8, 16, 32, 64], pxPerBeat, 30);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (let x = 0; x <= state.length; x += labelEvery) {
+    ctx.fillStyle = x % 4 === 0 ? GRAPH_COLORS.labelStrong : GRAPH_COLORS.label;
+    ctx.fillText(String(x), xToPx(x), plot.b + 8);
+  }
+
+  // Horizontal grid (pitch)
+  const step = firstFitting([1, 2, 3, 4, 6, 12, 24, 48], pxPerSemi, 15);
+  for (let y = Math.ceil(view.y0 / step) * step; y <= view.y1; y += step) {
+    const py = Math.round(yToPx(y)) + 0.5;
+    const octave = posMod(y, 12) === 0;
+    ctx.strokeStyle = octave ? GRAPH_COLORS.gridMajor : GRAPH_COLORS.gridBeat;
+    line(ctx, plot.l, py, plot.r, py);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = octave ? GRAPH_COLORS.labelStrong : GRAPH_COLORS.label;
+    ctx.textAlign = 'right';
+    ctx.fillText(String(y), plot.l - 8, py);
+    ctx.textAlign = 'left';
+    ctx.fillText(noteName(y), plot.r + 8, py);
+  }
+
+  // Axes: x-axis at y = 0 (A4) and y-axis at x = 0
+  ctx.strokeStyle = GRAPH_COLORS.axis;
+  ctx.lineWidth = 1.5;
+  if (view.y0 <= 0 && view.y1 >= 0) line(ctx, plot.l, yToPx(0), plot.r, yToPx(0));
+  line(ctx, plot.l, plot.t, plot.l, plot.b);
+  ctx.fillStyle = GRAPH_COLORS.labelStrong;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+  ctx.fillText('x [拍]', plot.r - 4, plot.b - 16);
+
+  // Curves
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.l, plot.t - 2, plot.r - plot.l, plot.b - plot.t + 4);
+  ctx.clip();
+  const breakThreshold = Math.max(1, (view.y1 - view.y0) * 0.05);
+  state.layers.forEach((layer, i) => {
+    if (!layer.fn) return;
+    const color = LAYER_COLORS[i % LAYER_COLORS.length];
+    ctx.globalAlpha = layer.muted ? 0.22 : 1;
+    if (isDrumLayer(layer)) { drawDrumLane(ctx, layer, color); return; }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.25;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.shadowColor = color;
+    ctx.shadowBlur = layer.muted ? 0 : 8;
+    ctx.beginPath();
+    let prev = NaN;
+    for (let px = plot.l; px <= plot.r; px += 1) {
+      const y = evalLayer(layer, Math.min(pxToX(px), state.length - 1e-9));
+      if (!Number.isFinite(y)) { prev = NaN; continue; }
+      const py = yToPx(y);
+      if (!Number.isFinite(prev) || Math.abs(y - prev) > breakThreshold) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+      prev = y;
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/** Noise layers have no meaningful pitch: draw them as hits along the bottom lane. */
+function drawDrumLane(ctx, layer, color) {
+  const { plot } = graph;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.shadowBlur = 0;
+  ctx.beginPath();
+  for (let px = plot.l; px <= plot.r; px += 1) {
+    const x = Math.min(pxToX(px), state.length - 1e-9);
+    if (!Number.isFinite(evalLayer(layer, x))) continue;
+    const h = DRUM_LANE_PX * envelopeAt(layer.env, x);
+    if (h < 1) continue;
+    ctx.moveTo(px, plot.b);
+    ctx.lineTo(px, plot.b - h);
+  }
+  ctx.stroke();
+}
+
+/** Per-frame draw: cached buffer + playhead + red dots. */
+function drawFrame(beat) {
+  const { ctx, plot, dpr } = graph;
+  if (!graph.w) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(graph.buf, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const px = xToPx(beat);
+  ctx.fillStyle = GRAPH_COLORS.played;
+  ctx.fillRect(plot.l, plot.t, px - plot.l, plot.b - plot.t);
+
+  ctx.strokeStyle = GRAPH_COLORS.playhead;
+  ctx.lineWidth = 1.25;
+  ctx.setLineDash([4, 4]);
+  line(ctx, px, plot.t, px, plot.b);
+  ctx.setLineDash([]);
+
+  // Dots on each curve at the current x
+  state.layers.forEach((layer, i) => {
+    if (layer.muted || isDrumLayer(layer)) return;
+    const y = evalLayer(layer, beat);
+    if (!Number.isFinite(y) || y < view.y0 || y > view.y1) return;
+    const py = yToPx(y);
+    ctx.save();
+    ctx.shadowColor = GRAPH_COLORS.red;
+    ctx.shadowBlur = transport.playing ? 16 : 6;
+    ctx.fillStyle = GRAPH_COLORS.red;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = LAYER_COLORS[i % LAYER_COLORS.length];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+
+  // The red dot travelling along the x axis
+  const axisY = view.y0 <= 0 && view.y1 >= 0 ? yToPx(0) : plot.b;
+  ctx.save();
+  ctx.shadowColor = GRAPH_COLORS.red;
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = GRAPH_COLORS.red;
+  ctx.beginPath();
+  ctx.arc(px, axisY, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(px, axisY, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ======================================================================
+ * Scope (small oscilloscope in the player bar)
+ * ==================================================================== */
+const scope = { canvas: $('scope'), ctx: $('scope').getContext('2d'), data: null };
+
+function drawScope() {
+  const { canvas, ctx } = scope;
+  if (canvas.offsetParent === null) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = GRAPH_COLORS.axis;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  if (audio.analyser && transport.playing) {
+    if (!scope.data) scope.data = new Uint8Array(audio.analyser.fftSize);
+    audio.analyser.getByteTimeDomainData(scope.data);
+    const n = scope.data.length;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * w;
+      const y = h / 2 + ((scope.data[i] - 128) / 128) * (h / 2 - 3);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+  } else {
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+  }
+  ctx.stroke();
+}
+
+/* ======================================================================
+ * UI: equations, layers, player
+ * ==================================================================== */
+function renderEquations() {
+  const box = $('equations');
+  box.innerHTML = '';
+  state.layers.forEach((layer, i) => {
+    const row = document.createElement('div');
+    row.className = 'eq' + (layer.muted ? ' muted' : '');
+    row.style.color = LAYER_COLORS[i % LAYER_COLORS.length];
+    const body = layer.node ? Expr.toTex(layer.node) : '\\text{（数式エラー）}';
+    const ampTex = layer.ampNode ? ` \\qquad a_{${i + 1}} = ${Expr.toTex(layer.ampNode)}` : '';
+    katex.render(`y_{${i + 1}} = ${body}${ampTex}`, row, { displayMode: true, throwOnError: false });
+    box.appendChild(row);
+  });
+  const map = document.createElement('div');
+  map.className = 'eq map';
+  katex.render(String.raw`f(y) = 440 \cdot 2^{\,y/12}\ \mathrm{Hz} \qquad \text{音量} = a(x)\cdot\mathrm{env}(x) \qquad x = \text{拍},\ t = \tfrac{60}{\mathrm{BPM}}\,x\ \text{秒}`, map, { throwOnError: false });
+  box.appendChild(map);
+}
+
+/** Recomputes range, redraws the cached graph and the equation panel. */
+function refreshVisuals() {
+  computeRange();
+  renderStatic();
+  renderEquations();
+}
+
+function optionList(entries, selected) {
+  return entries.map(([value, label]) => {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = label;
+    o.selected = value === selected;
+    return o;
+  });
+}
+
+function buildLayerCard(layer, index) {
+  const card = document.createElement('div');
+  card.className = 'layer' + (layer.muted ? ' muted' : '');
+  card.style.setProperty('--c', LAYER_COLORS[index % LAYER_COLORS.length]);
+  card.innerHTML = `
+    <div class="layer-head">
+      <span class="layer-name">y<sub>${index + 1}</sub></span>
+      <span class="spacer"></span>
+      <button class="icon-btn mute" type="button"></button>
+      <button class="icon-btn del" type="button" title="レイヤーを削除" aria-label="レイヤーを削除">✕</button>
+    </div>
+    <textarea spellcheck="false" rows="2" aria-label="レイヤー${index + 1}の数式"></textarea>
+    <input class="amp" spellcheck="false" placeholder="音量カーブ a(x)（空欄 = 1）例: exp(-2*t)" aria-label="レイヤー${index + 1}の音量カーブ">
+    <div class="err"></div>
+    <div class="layer-ctrls">
+      <select class="wave" aria-label="音色"></select>
+      <select class="env" aria-label="エンベロープ"></select>
+      <label class="vol">音量 <input type="range" min="0" max="1" step="0.01"></label>
+    </div>`;
+
+  const ta = card.querySelector('textarea');
+  const err = card.querySelector('.err');
+  const muteBtn = card.querySelector('.mute');
+  const waveSel = card.querySelector('.wave');
+  const envSel = card.querySelector('.env');
+  const volInput = card.querySelector('.vol input');
+
+  const ampInput = card.querySelector('.amp');
+  const syncError = () => {
+    err.textContent = [layer.error, layer.ampError].filter(Boolean).join(' / ');
+    ta.classList.toggle('invalid', !!layer.error);
+    ampInput.classList.toggle('invalid', !!layer.ampError);
+  };
+  ampInput.value = layer.amp;
+  ampInput.addEventListener('input', () => {
+    clearTimeout(layer.ampDebounce);
+    layer.ampDebounce = setTimeout(() => {
+      layer.amp = ampInput.value;
+      compileAmp(layer);
+      syncError();
+      refreshVisuals();
+    }, 180);
+  });
+  const syncMute = () => {
+    muteBtn.textContent = layer.muted ? 'ミュート中' : 'ON';
+    muteBtn.classList.toggle('on', !layer.muted);
+    card.classList.toggle('muted', layer.muted);
+  };
+
+  ta.value = layer.expr;
+  syncError();
+  syncMute();
+  waveSel.append(...optionList(Object.entries(INSTRUMENTS).map(([k, v]) => [k, v.label]), layer.wave));
+  envSel.append(...optionList(Object.entries(ENVELOPES).map(([k, v]) => [k, v.label]), layer.env));
+  volInput.value = layer.vol;
+
+  ta.addEventListener('input', () => {
+    clearTimeout(layer.debounce);
+    layer.debounce = setTimeout(() => {
+      layer.expr = ta.value;
+      compileLayer(layer);
+      syncError();
+      refreshVisuals();
+    }, 180);
+  });
+  muteBtn.addEventListener('click', () => {
+    layer.muted = !layer.muted;
+    syncMute();
+    renderStatic();
+    renderEquations();
+  });
+  card.querySelector('.del').addEventListener('click', () => {
+    state.layers = state.layers.filter((l) => l !== layer);
+    onLayersChanged();
+  });
+  waveSel.addEventListener('change', () => {
+    layer.wave = waveSel.value;
+    rebuildVoices();
+    refreshVisuals(); // drum (noise) layers are drawn differently
+  });
+  envSel.addEventListener('change', () => { layer.env = envSel.value; });
+  volInput.addEventListener('input', () => { layer.vol = Number(volInput.value); });
+  return card;
+}
+
+function renderLayers() {
+  const list = $('layers');
+  list.innerHTML = '';
+  state.layers.forEach((layer, i) => list.appendChild(buildLayerCard(layer, i)));
+  $('addLayer').disabled = state.layers.length >= MAX_LAYERS;
+}
+
+function onLayersChanged() {
+  renderLayers();
+  refreshVisuals();
+  rebuildVoices();
+}
+
+const PLAY_ICON = '<svg width="22" height="22" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>';
+const PAUSE_ICON = '<svg width="22" height="22" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor"/></svg>';
+
+function updatePlayButton() {
+  const btn = $('play');
+  btn.innerHTML = transport.playing ? PAUSE_ICON : PLAY_ICON;
+  btn.setAttribute('aria-label', transport.playing ? '一時停止' : '再生');
+}
+
+const ui = { progressDragging: false, graphDragging: false, lastReadout: '' };
+
+function updatePlayerUI(beat) {
+  if (!ui.progressDragging) $('progress').value = Math.round((beat / state.length) * PROGRESS_RES);
+  $('timeNow').textContent = formatTime(beatsToSec(beat));
+  $('timeTotal').textContent = formatTime(beatsToSec(state.length));
+  $('beatNow').textContent = `拍 ${beat.toFixed(2)} / ${state.length}`;
+
+  let html = `<span class="chip">x = <b>${beat.toFixed(2)}</b></span>`;
+  state.layers.forEach((layer, i) => {
+    const y = evalLayer(layer, beat);
+    const color = LAYER_COLORS[i % LAYER_COLORS.length];
+    const text = layer.muted ? 'mute' : Number.isFinite(y) ? `${y.toFixed(2)} → ${noteName(y)} · ${Math.round(semitoneToFreq(y))}Hz` : 'rest';
+    html += `<span class="chip" style="color:${color}">y<sub>${i + 1}</sub> = <b>${text}</b></span>`;
+  });
+  if (html !== ui.lastReadout) {
+    $('readout').innerHTML = html;
+    ui.lastReadout = html;
+  }
+}
+
+function frame() {
+  if (transport.playing && !state.loop && rawBeatAt(audio.ctx.currentTime) >= state.length) {
+    pause();
+    transport.beat = state.length;
+  }
+  const beat = currentBeat();
+  drawFrame(beat);
+  updatePlayerUI(beat);
+  drawScope();
+  requestAnimationFrame(frame);
+}
+
+/* ======================================================================
+ * Export (WAV / MP3) via OfflineAudioContext
+ * ==================================================================== */
+
+/**
+ * Renders the song offline and returns per-channel Float32Arrays.
+ * mode 'seamless': renders two loops and cuts out the second one, then
+ * crossfades its head with the audio that follows the cut, so the file
+ * loops without a click when a game engine repeats it.
+ */
+async function renderSong(mode) {
+  const sr = EXPORT_SAMPLE_RATE;
+  const loopSec = beatsToSec(state.length);
+  const seamless = mode === 'seamless';
+  const loops = seamless ? 2 : Number(mode);
+  const totalSec = seamless ? loopSec * 2 + LOOP_XFADE_SEC + 0.05 : loopSec * loops + EXPORT_TAIL_SEC;
+  const ctx = new OfflineAudioContext(2, Math.ceil(totalSec * sr), sr);
+  const master = buildMasterChain(ctx, ctx.destination, state.volume, state.reverb).input;
+  const voices = state.layers.map((layer) => buildVoice(ctx, master, layer.wave, 0));
+  const endBeat = seamless ? Infinity : state.length * loops;
+  for (let t = 0; t < totalSec; t += SCHED_STEP_SEC) {
+    const raw = (t * state.bpm) / 60;
+    const beat = posMod(raw, state.length);
+    voices.forEach((v, i) => scheduleVoice(v, state.layers[i], beat, t, raw >= endBeat));
+  }
+  const rendered = await ctx.startRendering();
+  const channels = [rendered.getChannelData(0), rendered.getChannelData(1)];
+  if (!seamless) return channels;
+
+  const start = Math.round(loopSec * sr);
+  const len = Math.round(loopSec * sr);
+  const xfade = Math.round(LOOP_XFADE_SEC * sr);
+  return channels.map((data) => {
+    const out = data.slice(start, start + len);
+    for (let i = 0; i < xfade; i++) {
+      const w = i / xfade;
+      out[i] = data[start + len + i] * (1 - w) + data[start + i] * w;
+    }
+    return out;
+  });
+}
+
+/** Scales all channels so the loudest sample hits EXPORT_PEAK (-1 dBFS). */
+function normalize(channels) {
+  let peak = 0;
+  for (const data of channels) for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  if (peak < 1e-6) return channels;
+  const gain = EXPORT_PEAK / peak;
+  return channels.map((data) => data.map((v) => v * gain));
+}
+
+function floatToInt16(f) {
+  const s = clamp(f, -1, 1);
+  return s < 0 ? s * 0x8000 : s * 0x7fff;
+}
+
+function encodeWav(channels, sampleRate) {
+  const n = channels[0].length;
+  const ch = channels.length;
+  const view = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const writeStr = (off, str) => [...str].forEach((c, i) => view.setUint8(off + i, c.charCodeAt(0)));
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + n * ch * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);              // PCM
+  view.setUint16(22, ch, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * ch * 2, true);
+  view.setUint16(32, ch * 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, n * ch * 2, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++, off += 2) view.setInt16(off, floatToInt16(channels[c][i]), true);
+  }
+  return new Blob([view.buffer], { type: 'audio/wav' });
+}
+
+let lamePromise = null;
+function loadLame() {
+  if (window.lamejs) return Promise.resolve();
+  lamePromise ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = LAMEJS_URL;
+    s.onload = () => resolve();
+    s.onerror = () => { lamePromise = null; reject(new Error('MP3 エンコーダを読み込めませんでした')); };
+    document.head.appendChild(s);
+  });
+  return lamePromise;
+}
+
+async function encodeMp3(channels, sampleRate, onProgress) {
+  await loadLame();
+  const enc = new lamejs.Mp3Encoder(channels.length, sampleRate, MP3_KBPS);
+  const ints = channels.map((data) => Int16Array.from(data, floatToInt16));
+  const parts = [];
+  const n = ints[0].length;
+  for (let i = 0; i < n; i += MP3_BLOCK) {
+    const chunk = enc.encodeBuffer(...ints.map((d) => d.subarray(i, i + MP3_BLOCK)));
+    if (chunk.length) parts.push(new Uint8Array(chunk));
+    if ((i / MP3_BLOCK) % 200 === 0) {
+      onProgress(i / n);
+      await new Promise((r) => setTimeout(r, 0)); // keep the UI responsive
+    }
+  }
+  const tail = enc.flush();
+  if (tail.length) parts.push(new Uint8Array(tail));
+  return new Blob(parts, { type: 'audio/mpeg' });
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+const safeFileName = (name) => (name || 'graph-synth').replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80);
+
+async function exportAudio() {
+  const btn = $('exportBtn');
+  const status = $('exportStatus');
+  const format = $('exportFormat').value;
+  const mode = $('exportMode').value;
+  btn.disabled = true;
+  try {
+    status.textContent = 'レンダリング中…';
+    const channels = normalize(await renderSong(mode));
+    status.textContent = 'エンコード中…';
+    const blob = format === 'mp3'
+      ? await encodeMp3(channels, EXPORT_SAMPLE_RATE, (p) => { status.textContent = `MP3 エンコード中… ${Math.round(p * 100)}%`; })
+      : encodeWav(channels, EXPORT_SAMPLE_RATE);
+    const suffix = mode === 'seamless' ? '_loop' : `_x${mode}`;
+    downloadBlob(blob, `${safeFileName(state.name)}${suffix}.${format}`);
+    const sec = channels[0].length / EXPORT_SAMPLE_RATE;
+    status.textContent = `書き出し完了：${sec.toFixed(2)} 秒 · ${(blob.size / 1024 / 1024).toFixed(2)} MB`;
+  } catch (err) {
+    console.error('[GraphSynth] export failed:', err);
+    status.textContent = `書き出しに失敗しました：${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ======================================================================
+ * Presets & sharing
+ * ==================================================================== */
+function applySong(song) {
+  const wasPlaying = transport.playing;
+  pause();
+  state.name = String(song.name ?? '').slice(0, 60);
+  $('songName').textContent = state.name;
+  $('favName').value = state.name;
+  state.bpm = clamp(Math.round(Number(song.bpm) || 120), 40, 240);
+  state.length = clamp(Math.round(Number(song.length) || 16), 1, 256);
+  state.loop = song.loop ?? true;
+  state.reverb = clamp(Number(song.reverb ?? 0.3) || 0, 0, 1);
+  state.emotion = String(song.emotion ?? '');
+  state.notes = Array.isArray(song.notes) ? song.notes.filter((n) => n && n.h) : [];
+  state.layers = (Array.isArray(song.layers) ? song.layers : []).slice(0, MAX_LAYERS).map(makeLayer);
+  transport.beat = 0;
+  $('bpm').value = state.bpm;
+  $('bpmOut').textContent = state.bpm;
+  $('length').value = state.length;
+  syncLoopButton();
+  syncReverb();
+  $('exportMode').value = state.loop ? 'seamless' : '1';
+  renderLayers();
+  refreshVisuals();
+  renderNotes();
+  renderFavorites();
+  if (wasPlaying) play();
+}
+
+/** Plain serialisable copy of the current song. */
+function snapshotSong() {
+  return {
+    name: state.name, bpm: state.bpm, length: state.length, loop: state.loop, reverb: state.reverb,
+    emotion: state.emotion, notes: state.notes,
+    layers: state.layers.map(({ expr, amp, wave, env, vol, muted }) => ({ expr, amp, wave, env, vol, muted })),
+  };
+}
+
+function syncLoopButton() {
+  const btn = $('loop');
+  btn.classList.toggle('on', state.loop);
+  btn.setAttribute('aria-pressed', String(state.loop));
+}
+
+function syncReverb() {
+  $('reverb').value = state.reverb;
+  $('reverbOut').textContent = Math.round(state.reverb * 100);
+  audio.setReverb?.(state.reverb);
+}
+
+/** "Why does this feel like that" panel built from the generator's notes. */
+function renderNotes() {
+  const box = $('notes');
+  box.innerHTML = '';
+  box.hidden = state.notes.length === 0;
+  if (!state.notes.length) return;
+  const title = document.createElement('div');
+  title.className = 'side-title';
+  title.textContent = '🧠 なぜこう感じるのか — 設計の根拠';
+  const list = document.createElement('ol');
+  list.className = 'notes-list';
+  for (const n of state.notes) {
+    const li = document.createElement('li');
+    const h = document.createElement('b');
+    h.textContent = n.h;
+    const p = document.createElement('p');
+    p.textContent = n.b;
+    li.append(h, p);
+    if (REFS[n.r]) {
+      const cite = document.createElement('cite');
+      cite.textContent = REFS[n.r];
+      li.append(cite);
+    }
+    list.appendChild(li);
+  }
+  const foot = document.createElement('p');
+  foot.className = 'notes-foot';
+  foot.textContent = '※ 研究知見は「多くの人で見られる傾向」です。感じ方には個人差・文化差・文脈（ゲームの場面や映像）の影響があります。';
+  box.append(title, list, foot);
+}
+
+/** Switches to another song, remembering the current one for "戻る". */
+function switchSong(song, presetValue = '') {
+  history_.push(snapshotSong());
+  if (history_.length > HISTORY_LIMIT) history_.shift();
+  $('preset').value = presetValue;
+  applySong(song);
+  updateHistoryButton();
+}
+
+const history_ = [];
+const HISTORY_LIMIT = 30;
+
+function updateHistoryButton() {
+  $('prevSong').disabled = history_.length === 0;
+}
+
+function goBack() {
+  const prev = history_.pop();
+  if (!prev) return;
+  $('preset').value = '';
+  applySong(prev);
+  updateHistoryButton();
+}
+
+function randomize() {
+  switchSong(SongGen.generate($('style').value));
+}
+
+/* ----- Favorites (stored in this browser's localStorage) ----- */
+const FAV_STORAGE_KEY = 'graphsynth.favorites.v1';
+const FAV_LIMIT = 200;
+
+function loadFavorites() {
+  try {
+    const list = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch (err) {
+    console.warn('[GraphSynth] could not read favorites:', err);
+    return [];
+  }
+}
+
+function storeFavorites(list) {
+  try {
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(list));
+    return true;
+  } catch (err) {
+    console.warn('[GraphSynth] could not write favorites:', err);
+    showToast('保存できませんでした（ブラウザのストレージが無効です）');
+    return false;
+  }
+}
+
+const songKey = (song) => JSON.stringify([song.bpm, song.length, song.layers]);
+
+function saveFavorite() {
+  const name = $('favName').value.trim() || state.name || `お気に入り ${new Date().toLocaleString('ja-JP')}`;
+  state.name = name;
+  $('songName').textContent = name;
+  const song = snapshotSong();
+  const list = loadFavorites().filter((f) => songKey(f.song) !== songKey(song));
+  list.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), savedAt: Date.now(), song });
+  if (storeFavorites(list.slice(0, FAV_LIMIT))) showToast(`「${name}」を保存しました`);
+  renderFavorites();
+}
+
+function deleteFavorite(id) {
+  storeFavorites(loadFavorites().filter((f) => f.id !== id));
+  renderFavorites();
+}
+
+function renderFavorites() {
+  const list = loadFavorites();
+  const ul = $('favList');
+  ul.innerHTML = '';
+  $('favCount').textContent = list.length ? `${list.length}` : '';
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.className = 'fav-empty';
+    li.textContent = '🎲 で気に入った曲ができたら ★ 保存。ここに並びます。';
+    ul.appendChild(li);
+    return;
+  }
+  const currentKey = songKey(snapshotSong());
+  for (const fav of list) {
+    const li = document.createElement('li');
+    li.className = 'fav-item' + (songKey(fav.song) === currentKey ? ' current' : '');
+    const load = document.createElement('button');
+    load.className = 'fav-load';
+    load.type = 'button';
+    const title = document.createElement('b');
+    title.textContent = fav.song.name || '(無題)';
+    const meta = document.createElement('small');
+    meta.textContent = `${fav.song.bpm}BPM · ${fav.song.layers.length}層 · ${new Date(fav.savedAt).toLocaleDateString('ja-JP')}`;
+    load.append(title, meta);
+    load.addEventListener('click', () => switchSong(fav.song));
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.type = 'button';
+    del.textContent = '✕';
+    del.title = '削除';
+    del.setAttribute('aria-label', `${fav.song.name} を削除`);
+    del.addEventListener('click', () => deleteFavorite(fav.id));
+    li.append(load, del);
+    ul.appendChild(li);
+  }
+}
+
+function encodeSong() {
+  const bytes = new TextEncoder().encode(JSON.stringify(snapshotSong()));
+  let bin = '';
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodeSong(hash) {
+  try {
+    const b64 = hash.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (err) {
+    console.warn('[GraphSynth] could not decode shared song:', err);
+    return null;
+  }
+}
+
+async function shareLink() {
+  const url = `${location.origin}${location.pathname}#${encodeSong()}`;
+  history.replaceState(null, '', url);
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast('リンクをコピーしました');
+  } catch (err) {
+    console.warn('[GraphSynth] clipboard failed:', err);
+    showToast('URL を更新しました（アドレスバーからコピーしてください）');
+  }
+}
+
+/* ======================================================================
+ * Wiring
+ * ==================================================================== */
+function bindControls() {
+  const presetSel = $('preset');
+  presetSel.append(...optionList([['', '—'], ...PRESETS.map((p, i) => [String(i), p.name])], ''));
+  presetSel.options[0].disabled = true;
+  presetSel.addEventListener('change', () => switchSong(PRESETS[Number(presetSel.value)], presetSel.value));
+
+  const styleSel = $('style');
+  styleSel.append(...optionList(Object.entries(STYLES).map(([k, s]) => [k, s.label]), 'auto'));
+  styleSel.addEventListener('change', randomize);
+  $('exportBtn').addEventListener('click', exportAudio);
+
+  $('randomize').addEventListener('click', randomize);
+  $('prevSong').addEventListener('click', goBack);
+  $('favSave').addEventListener('click', saveFavorite);
+  $('favName').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveFavorite(); });
+
+  $('play').addEventListener('click', togglePlay);
+  $('share').addEventListener('click', shareLink);
+
+  $('addLayer').addEventListener('click', () => {
+    if (state.layers.length >= MAX_LAYERS) return;
+    state.layers.push(makeLayer({ expr: 'pick(floor(x), 0, 4, 7, 12)', wave: 'triangle', env: '1', vol: 0.4 }));
+    onLayersChanged();
+  });
+
+  const progress = $('progress');
+  progress.addEventListener('pointerdown', () => { ui.progressDragging = true; });
+  window.addEventListener('pointerup', () => { ui.progressDragging = false; });
+  progress.addEventListener('input', () => seek((Number(progress.value) / PROGRESS_RES) * state.length));
+
+  $('bpm').addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    retime(() => { state.bpm = v; });
+    $('bpmOut').textContent = v;
+  });
+
+  $('volume').addEventListener('input', (e) => {
+    state.volume = Number(e.target.value);
+    $('volOut').textContent = Math.round(state.volume * 100);
+    if (audio.master) audio.master.gain.setTargetAtTime(state.volume, audio.ctx.currentTime, 0.02);
+  });
+
+  $('loop').addEventListener('click', (e) => {
+    retime(() => { state.loop = !state.loop; });
+    e.currentTarget.classList.toggle('on', state.loop);
+    e.currentTarget.setAttribute('aria-pressed', String(state.loop));
+  });
+
+  $('length').addEventListener('change', (e) => {
+    const v = clamp(Math.round(Number(e.target.value) || 16), 1, 256);
+    e.target.value = v;
+    retime(() => { state.length = v; });
+    refreshVisuals();
+  });
+
+  // Click / drag on the graph to seek
+  const canvas = graph.canvas;
+  const seekFromPointer = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    seek(clamp(pxToX(e.clientX - rect.left), 0, state.length - 1e-6));
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    ui.graphDragging = true;
+    canvas.setPointerCapture(e.pointerId);
+    seekFromPointer(e);
+  });
+  canvas.addEventListener('pointermove', (e) => { if (ui.graphDragging) seekFromPointer(e); });
+  canvas.addEventListener('pointerup', () => { ui.graphDragging = false; });
+  canvas.addEventListener('pointercancel', () => { ui.graphDragging = false; });
+
+  window.addEventListener('keydown', (e) => {
+    const tag = e.target.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
+    if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+    else if (e.code === 'ArrowRight') seek(currentBeat() + SEEK_KEY_BEATS);
+    else if (e.code === 'ArrowLeft') seek(currentBeat() - SEEK_KEY_BEATS);
+    else if (e.code === 'Home') seek(0);
+    else if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) randomize();
+  });
+
+  new ResizeObserver(resizeGraph).observe(document.querySelector('.graph-wrap'));
+}
+
+function init() {
+  if (!window.math || !window.katex) {
+    document.querySelector('.app').innerHTML = '<div class="fatal">ライブラリ（math.js / KaTeX）を読み込めませんでした。ネット接続を確認してください。</div>';
+    console.error('[GraphSynth] math.js or KaTeX failed to load');
+    return;
+  }
+  bindControls();
+  updatePlayButton();
+  updateHistoryButton();
+  const shared = location.hash.length > 1 ? decodeSong(location.hash.slice(1)) : null;
+  applySong(shared ?? SongGen.generate());
+  resizeGraph();
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>
