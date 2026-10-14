@@ -95,6 +95,14 @@
     transition: transform .08s ease;
   }
   .play-btn:active { transform: scale(.95); }
+  .play-btn.loading { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+  .load-status { font-size: 12px; color: var(--accent-2); font-family: var(--mono); }
+  .load-status:empty { display: none; }
+  .user-samples { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .user-samples li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 4px 4px 4px 10px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 0; }
+  .credit { font-size: 11px; color: var(--muted); line-height: 1.5; margin: 0; }
   .play-btn:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
   .seek { flex: 1 1 280px; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
   .seek input { width: 100%; margin: 0; }
@@ -203,6 +211,7 @@
       <div>GRAPH·SYNTH<br><small>感情を、数式で設計する。</small></div>
     </div>
     <span class="song-name" id="songName"></span>
+    <span class="load-status" id="loadStatus" role="status"></span>
     <div class="spacer"></div>
     <button class="btn" id="prevSong" title="ひとつ前の曲に戻す">↶ 戻る</button>
     <button class="btn accent" id="randomize" title="選んだ感情でもう一曲（R キー）">🎲 もう一曲</button>
@@ -242,7 +251,7 @@
         <div class="chips" id="scenes" aria-label="ゲームの場面から選ぶ"></div>
         <div class="emo-opts">
           <label class="check"><input type="checkbox" id="climax"> 鳥肌のクライマックス</label>
-          <label class="field">音色 <select id="palette"><option value="auto">感情に合わせる</option><option value="chip">8bit</option></select></label>
+          <label class="field">音色 <select id="palette"><option value="real" selected>リアル楽器（録音）</option><option value="auto">シンセ</option><option value="chip">8bit</option></select></label>
         </div>
         <button class="btn accent" id="compose">🎼 この感情で作曲</button>
         <details>
@@ -260,8 +269,20 @@
       </div>
 
       <div class="card side-section">
-        <div class="side-title">効果音（SFX）</div>
+        <div class="side-title">効果音（SFX）
+          <select id="sfxMode" title="効果音の音源"><option value="real" selected>リアル（録音）</option><option value="synth">シンセ</option></select>
+        </div>
         <div id="sfx" class="sfx"></div>
+        <p class="credit" id="credit"></p>
+      </div>
+
+      <div class="card side-section">
+        <div class="side-title">自分の音（録音ファイル）</div>
+        <label class="btn" style="text-align:center">🎙 音声ファイルを読み込む
+          <input type="file" id="userFile" accept="audio/*" multiple hidden>
+        </label>
+        <ul class="user-samples" id="userSamples"></ul>
+        <p class="hint">WAV / MP3 / OGG などを読み込むと、レイヤーの音色「自分の音」から選べます。y = 0 が元の音の高さ（y = 12 で1オクターブ上）。データはこのブラウザ内にだけ保存されます。</p>
       </div>
 
       <div class="card side-section">
@@ -381,6 +402,68 @@ const INSTRUMENTS = {
   shepard:  { label: 'シェパード音（無限上昇）', kind: 'shepard', level: 0.9 },
   noise:    { label: 'ノイズ（ドラム・環境音）', kind: 'noise', q: 0.9, level: 1.4 },
 };
+
+/**
+ * Recorded instruments (FluidR3_GM soundfont, CC BY 3.0). Loaded on demand.
+ * sustain: loop the steady part of the sample so long notes keep sounding.
+ * fallback: synth used if the samples cannot be loaded (offline etc.).
+ */
+const GM = (label, gm, opts = {}) => ({ label, kind: 'sample', group: 'real', gm, sustain: false, level: 0.9, fallback: 'triangle', ...opts });
+const GM_FX = (label, gm, opts = {}) => GM(label, gm, { group: 'realfx', fallback: 'noise', ...opts });
+Object.assign(INSTRUMENTS, {
+  gm_piano:        GM('ピアノ', 'acoustic_grand_piano', { fallback: 'epiano' }),
+  celesta:         GM('チェレスタ', 'celesta', { fallback: 'musicbox' }),
+  glockenspiel:    GM('グロッケン', 'glockenspiel', { fallback: 'bell' }),
+  music_box_real:  GM('オルゴール', 'music_box', { fallback: 'musicbox' }),
+  marimba:         GM('マリンバ', 'marimba', { fallback: 'triangle' }),
+  kalimba:         GM('カリンバ', 'kalimba', { fallback: 'triangle' }),
+  tubular_bells:   GM('チューブラーベル', 'tubular_bells', { fallback: 'bell' }),
+  tinkle_bell:     GM('鈴', 'tinkle_bell', { fallback: 'bell' }),
+  harp:            GM('ハープ', 'orchestral_harp', { fallback: 'triangle' }),
+  guitar_nylon:    GM('ギター（ナイロン）', 'acoustic_guitar_nylon', { fallback: 'triangle' }),
+  guitar_steel:    GM('ギター（スチール）', 'acoustic_guitar_steel', { fallback: 'triangle' }),
+  distortion_guitar: GM('エレキギター（歪み）', 'distortion_guitar', { sustain: true, fallback: 'sawtooth' }),
+  koto:            GM('琴', 'koto', { fallback: 'triangle' }),
+  pizzicato:       GM('ピチカート', 'pizzicato_strings', { fallback: 'triangle' }),
+  strings_real:    GM('ストリングス', 'string_ensemble_1', { sustain: true, fallback: 'strings' }),
+  tremolo_strings: GM('トレモロ弦', 'tremolo_strings', { sustain: true, fallback: 'strings' }),
+  violin:          GM('バイオリン', 'violin', { sustain: true, fallback: 'strings' }),
+  cello:           GM('チェロ', 'cello', { sustain: true, fallback: 'strings' }),
+  contrabass:      GM('コントラバス', 'contrabass', { sustain: true, fallback: 'sine' }),
+  acoustic_bass:   GM('ウッドベース', 'acoustic_bass', { fallback: 'sine' }),
+  choir_real:      GM('クワイア', 'choir_aahs', { sustain: true, fallback: 'choir' }),
+  flute_real:      GM('フルート', 'flute', { sustain: true, fallback: 'flute' }),
+  pan_flute:       GM('パンフルート', 'pan_flute', { sustain: true, fallback: 'flute' }),
+  ocarina:         GM('オカリナ', 'ocarina', { sustain: true, fallback: 'flute' }),
+  shakuhachi:      GM('尺八', 'shakuhachi', { sustain: true, fallback: 'flute' }),
+  oboe:            GM('オーボエ', 'oboe', { sustain: true, fallback: 'flute' }),
+  clarinet:        GM('クラリネット', 'clarinet', { sustain: true, fallback: 'flute' }),
+  trumpet:         GM('トランペット', 'trumpet', { sustain: true, fallback: 'sawtooth' }),
+  french_horn:     GM('ホルン', 'french_horn', { sustain: true, fallback: 'sawtooth' }),
+  church_organ:    GM('パイプオルガン', 'church_organ', { sustain: true, fallback: 'organ' }),
+  timpani:         GM('ティンパニ', 'timpani', { fallback: 'sine' }),
+  taiko_drum:      GM('和太鼓', 'taiko_drum', { fallback: 'sine' }),
+  woodblock:       GM('ウッドブロック', 'woodblock', { fallback: 'noise' }),
+  breath_noise:    GM_FX('息づかい', 'breath_noise'),
+  seashore:        GM_FX('波の音', 'seashore', { sustain: true }),
+  bird_tweet:      GM_FX('鳥のさえずり', 'bird_tweet'),
+  applause:        GM_FX('拍手', 'applause', { sustain: true }),
+  gunshot:         GM_FX('銃声', 'gunshot'),
+  helicopter:      GM_FX('ヘリコプター', 'helicopter', { sustain: true }),
+  telephone_ring:  GM_FX('電話のベル', 'telephone_ring'),
+  reverse_cymbal:  GM_FX('逆再生シンバル', 'reverse_cymbal'),
+  fret_noise:      GM_FX('ギターのフレットノイズ', 'guitar_fret_noise'),
+});
+const INSTRUMENT_GROUPS = { synth: 'シンセ', real: 'リアル楽器（録音）', realfx: 'リアル効果音素材（録音）', user: '自分の音' };
+const SOUNDFONT_URLS = [
+  'https://cdn.jsdelivr.net/gh/gleitz/midi-js-soundfonts@gh-pages/FluidR3_GM/',
+  'https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/',
+];
+const SOUNDFONT_CREDIT = 'リアル音源：FluidR3_GM（Frank Wen, CC BY 3.0）via gleitz/midi-js-soundfonts';
+const SAMPLE_STEP = 3;            // decode every 3rd semitone; neighbours are repitched
+const SAMPLE_RELEASE_TAU = 0.04;  // fade time constant when a sampled note is cut
+const SAMPLE_PEAK = 0.8;          // banks are normalised to this peak (soundfont samples are ~-20 dBFS)
+const USER_ROOT_MIDI = 69;        // user sounds play at their original pitch at y = 0
 const SHEPARD_SPAN = 3;           // partials from -3 to +3 octaves
 const SHEPARD_CENTER_HZ = 440;
 const SHEPARD_SIGMA = 1.1;        // spectral envelope width in octaves
@@ -515,6 +598,7 @@ const REFS = {
   voss:       'Voss & Clarke (1975) 音楽と音声の1/fゆらぎ',
   bernardi:   'Bernardi, Porta & Sleight (2006) 音楽による心拍・呼吸の変化',
   trehub:     'Trehub & Trainor (1998) 子守唄と遊び歌の普遍的特徴',
+  ratcliffe:  'Ratcliffe, Gatersleben & Sowden (2013) 鳥の声と注意の回復・ストレス低減',
 };
 const note = (h, b, r) => ({ h, b, r });
 
@@ -596,9 +680,9 @@ const CONTOURS = {
 // Drum layer templates (noise instrument for snare/hats)
 const KICK = '-38 + 30*exp(-20*frac(x))';
 const DRUMS = {
-  kick4:     { expr: KICK, wave: 'sine', env: '1', vol: 0.85 },
-  kickHalf:  { expr: `mod(floor(x), 2) == 0 ? ${KICK} : NaN`, wave: 'sine', env: '1', vol: 0.75 },
-  kickRock:  { expr: 'pick(floor(x*2), 1, 0, 0, 1, 1, 0, 0, 0) < 1 ? NaN : -38 + 30*exp(-20*frac(x*2))', wave: 'sine', env: '2', vol: 0.85 },
+  kick4:     { expr: KICK, wave: 'sine', env: '1', vol: 0.85, real: { expr: '-21', wave: 'taiko_drum' } },
+  kickHalf:  { expr: `mod(floor(x), 2) == 0 ? ${KICK} : NaN`, wave: 'sine', env: '1', vol: 0.75, real: { expr: 'mod(floor(x), 2) == 0 ? -21 : NaN', wave: 'taiko_drum' } },
+  kickRock:  { expr: 'pick(floor(x*2), 1, 0, 0, 1, 1, 0, 0, 0) < 1 ? NaN : -38 + 30*exp(-20*frac(x*2))', wave: 'sine', env: '2', vol: 0.85, real: { expr: 'pick(floor(x*2), 1, 0, 0, 1, 1, 0, 0, 0) < 1 ? NaN : -21', wave: 'taiko_drum' } },
   snare:     { expr: 'mod(floor(x), 2) == 1 ? 26 : NaN', wave: 'noise', env: '1s', vol: 0.42 },
   snareMarch:{ expr: 'pick(floor(x*4), 1, 0, 1, 1, 1, 0, 1, 0) < 1 ? NaN : 28', wave: 'noise', env: '4s', vol: 0.26 },
   hat8:      { expr: '52', wave: 'noise', env: '2s', vol: 0.16 },
@@ -682,7 +766,22 @@ const SCENES = [
   { label: '🎬 エンディング', emo: 'touching', climax: true },
 ];
 
-const BRIGHT_TIMBRES = new Set(['sawtooth', 'supersaw', 'square', 'pulse25', 'pulse12', 'rough', 'organ']);
+const BRIGHT_TIMBRES = new Set(['sawtooth', 'supersaw', 'square', 'pulse25', 'pulse12', 'rough', 'organ', 'trumpet', 'distortion_guitar', 'glockenspiel', 'tremolo_strings']);
+
+// Recorded-instrument choices per emotion and role (palette "リアル楽器")
+const REAL_TIMBRES = {
+  joy:       { lead: ['marimba', 'gm_piano', 'guitar_nylon', 'flute_real'], harmony: ['gm_piano', 'guitar_nylon', 'pizzicato'], pad: ['strings_real'], bass: ['acoustic_bass'] },
+  heroic:    { lead: ['trumpet', 'french_horn', 'strings_real'], harmony: ['strings_real', 'harp'], pad: ['strings_real', 'french_horn'], bass: ['cello', 'contrabass'] },
+  touching:  { lead: ['violin', 'flute_real', 'gm_piano', 'cello'], harmony: ['gm_piano', 'harp'], pad: ['strings_real', 'choir_real'], bass: ['contrabass', 'cello'] },
+  nostalgia: { lead: ['gm_piano', 'music_box_real', 'guitar_nylon', 'clarinet', 'ocarina'], harmony: ['gm_piano', 'harp', 'guitar_nylon'], pad: ['strings_real'], bass: ['acoustic_bass', 'contrabass'] },
+  calm:      { lead: ['flute_real', 'harp', 'gm_piano', 'shakuhachi'], harmony: ['harp', 'guitar_nylon', 'koto'], pad: ['strings_real', 'choir_real'], bass: ['contrabass'] },
+  wonder:    { lead: ['celesta', 'harp', 'choir_real', 'glockenspiel', 'pan_flute'], harmony: ['harp', 'celesta'], pad: ['choir_real', 'strings_real'], bass: ['contrabass'] },
+  sad:       { lead: ['cello', 'violin', 'gm_piano', 'oboe'], harmony: ['gm_piano', 'harp'], pad: ['strings_real'], bass: ['contrabass'] },
+  suspense:  { lead: ['pizzicato', 'cello', 'gm_piano'], harmony: ['pizzicato'], pad: ['tremolo_strings'], bass: ['contrabass', 'timpani'] },
+  unease:    { lead: ['celesta', 'church_organ', 'music_box_real'], harmony: ['harp'], pad: ['tremolo_strings', 'church_organ'], bass: ['contrabass'] },
+  fear:      { lead: ['music_box_real', 'celesta'], harmony: ['harp'], pad: ['tremolo_strings'], bass: ['contrabass'] },
+  anger:     { lead: ['strings_real', 'trumpet', 'distortion_guitar'], harmony: ['strings_real', 'distortion_guitar'], pad: ['strings_real'], bass: ['cello', 'timpani'] },
+};
 const ROOT_MIN = -9;
 const ROOT_MAX = 8;
 const CLIMAX_BEAT = 16;
@@ -763,7 +862,7 @@ const DEVICES = {
   waves: {
     post: (g) => {
       const period = Math.round((BREATH_SEC * g.bpm) / 60);
-      g.add({ expr: `-4 + 6*sin(2*pi*x/${period * 2})`, amp: `0.25 + 0.2*sin(2*pi*x/${period})`, wave: 'noise', env: 'hold', vol: 0.3 }, 5, 'ambience');
+      g.add({ expr: `-4 + 6*sin(2*pi*x/${period * 2})`, amp: `0.25 + 0.2*sin(2*pi*x/${period})`, wave: 'noise', env: 'hold', vol: 0.3, real: { expr: '0', wave: 'seashore', vol: 0.5 } }, 5, 'ambience');
     },
     why: note('波・風の環境音', '自然音のゆるやかで不規則なゆらぎ（1/f的）は「心地よい」と感じられやすい。', 'voss'),
   },
@@ -779,11 +878,11 @@ const DEVICES = {
     why: note('ファンファーレ', '上行4度の呼びかけと行進のリズム：集団の前進・決意・勝利の連想。', 'gabrielsson'),
   },
   ticking: {
-    post: (g) => g.add({ expr: 'frac(x) < 0.5 ? 60 : 56', wave: 'noise', env: '2s', vol: 0.12 }, 5, 'drum'),
+    post: (g) => g.add({ expr: 'frac(x) < 0.5 ? 60 : 56', wave: 'noise', env: '2s', vol: 0.12, real: { expr: 'frac(x) < 0.5 ? 12 : 7', wave: 'woodblock' } }, 5, 'ticking'),
     why: note('時計の刻み', '一定の刻みは時間切迫を意識させ、「次に何かが起きる」予期を保ち続ける（ITPRAの緊張反応）。', 'huron06'),
   },
   shepard: {
-    post: (g) => g.add({ expr: '12*frac(x/8)', wave: 'shepard', env: 'hold', vol: 0.22 }, 6, 'device'),
+    post: (g) => g.add({ expr: '12*frac(x/8)', wave: 'shepard', env: 'hold', vol: 0.22 }, 6, 'shepard'),
     why: note('シェパード音（終わらない上昇）', 'オクターブ違いの成分を重みづけして、永遠に上がり続けて聞こえる錯覚。解決しない上昇＝緊張の持続（映画『ダンケルク』）。', 'shepard'),
   },
   detune: {
@@ -798,7 +897,7 @@ const DEVICES = {
     why: note('ずれたリズム（3対2）', '拍とかみ合わないリズムで次の音のタイミングが予測しにくい＝予期の失敗が落ち着かなさを生む。', 'huron06'),
   },
   clusterDrone: {
-    post: (g) => g.add({ expr: `${g.root - 24}`, amp: '0.45 + 0.35*sin(pi*x/8)', wave: 'cluster', env: 'hold', vol: 0.38 }, 7, 'device'),
+    post: (g) => g.add({ expr: `${g.root - 24}`, amp: '0.45 + 0.35*sin(pi*x/8)', wave: 'cluster', env: 'hold', vol: 0.38 }, 7, 'cluster'),
     why: note('不協和クラスターの持続音', '半音と三全音を重ねた低音：臨界帯域内の周波数が干渉し「ラフネス（ザラつき）」を生む＝感覚的不協和。', 'plomp'),
   },
   heartbeat: {
@@ -806,15 +905,15 @@ const DEVICES = {
       expr: '-42 + 4*exp(-30*frac(x))',
       amp: 'frac(x) < 0.16 ? exp(-28*frac(x)) : 0.7*exp(-28*(frac(x) - 0.16))',
       wave: 'sine', env: 'hold', vol: 0.9,
-    }, 6, 'device'),
+    }, 6, 'heartbeat'),
     why: note('心臓の鼓動', '低音のドクン・ドクンに身体のリズムが同調する（リズム同調）。テンポを上げると不安が増す。', 'juslin08'),
   },
   scream: {
     post: (g) => g.add({
       expr: `${g.root + 24} + 3*sin(pi*x*0.7) + pick(floor(x/4), 0, 1, 6, -1)`,
       amp: 'pick(floor(x/2), 0, 0, 0, 1, 0, 0, 1, 0)*(1 - frac(x/2))',
-      wave: 'rough', env: 'hold', vol: 0.3,
-    }, 6, 'device'),
+      wave: 'rough', env: 'hold', vol: 0.3, real: { wave: 'violin' },
+    }, 6, 'scream'),
     why: note('悲鳴質の高音（ラフネス＋非線形）', '30〜150Hzの振幅変調（ラフネス）は人の悲鳴の特徴で、扁桃体を強く駆動する。不規則な音程の跳躍は映画音楽で恐怖を高める。', 'arnal'),
   },
   brokenLullaby: {
@@ -876,10 +975,16 @@ const EmotionGen = (() => {
       wave, env, vol: 0.32,
     }, 10, 'lead');
     g.note(CONTOURS[contour].why);
-    const bright = BRIGHT_TIMBRES.has(wave);
+    g.legato = legato;
+  }
+
+  /** Timbre note is written after palettes are applied so it names the final instrument. */
+  function timbreNote(g) {
+    const wave = g.lead.wave;
+    const legato = g.legato;
     g.note(note(
       `音色と奏法：${INSTRUMENTS[wave].label}・${legato ? 'レガート' : 'スタッカート気味'}`,
-      `${bright ? '倍音の多い明るい音色は覚醒・力強さ・攻撃性' : '倍音の少ない柔らかい音色は優しさ・悲しみ・安らぎ'}と結びつく。${legato ? '音をつなげるレガートは穏やか・悲しみ' : '短く切る奏法は活発・喜び・緊張'}の手掛かり。`,
+      `${BRIGHT_TIMBRES.has(wave) ? '倍音の多い明るい音色は覚醒・力強さ・攻撃性' : '倍音の少ない柔らかい音色は優しさ・悲しみ・安らぎ'}と結びつく。${legato ? '音をつなげるレガートは穏やか・悲しみ' : '短く切る奏法は活発・喜び・緊張'}の手掛かり。`,
       'juslin03',
     ));
   }
@@ -926,7 +1031,10 @@ const EmotionGen = (() => {
         l.amp = mulAmp(l.amp, cresc);
       }
     }
-    g.add({ expr: `x >= ${B - 6} and x < ${B - 0.5} ? 18 + 30*(x - ${B - 6})/5.5 : NaN`, amp: `(x - ${B - 6})/5.5`, wave: 'noise', env: 'hold', vol: 0.32 }, 5, 'riser');
+    g.add({
+      expr: `x >= ${B - 6} and x < ${B - 0.5} ? 18 + 30*(x - ${B - 6})/5.5 : NaN`, amp: `(x - ${B - 6})/5.5`, wave: 'noise', env: 'hold', vol: 0.32,
+      real: { expr: `x >= ${B - 2.5} and x < ${B - 0.5} ? 0 : NaN`, amp: '1', wave: 'reverse_cymbal', vol: 0.5 },
+    }, 5, 'riser');
     g.note(note('鳥肌（フリッソン）の設計', `${B}拍目でメロディを1オクターブ上げ、ドラムを投入し、音域と音量を一気に広げる。鳥肌反応と最も相関するのは「急な音量増加・音域の拡大・新しい声部の参入」。`, 'guhn'));
     g.note(note('溜め → 一瞬の静寂 → 解放', `${B / 2}拍目からクレッシェンドし、直前の0.5拍を無音にする。期待が最大になった瞬間に解決させると、報酬系のドーパミン放出が強まる。`, 'salimpoor'));
     g.note(note('上昇ノイズ（接近音）', '音量と音高が上がり続ける音は「何かが近づいてくる」と知覚され、注意と覚醒を引き上げる。', 'neuhoff'));
@@ -940,7 +1048,24 @@ const EmotionGen = (() => {
     }
   }
 
+  function applyRealPalette(g) {
+    const t = REAL_TIMBRES[g.key];
+    for (const l of g.layers) {
+      if (l.real) Object.assign(l, l.real);
+      switch (l.role) {
+        case 'lead': l.wave = g.leadWave ? 'music_box_real' : choice(t.lead); break;
+        case 'arp': l.wave = choice(t.harmony); break;
+        case 'pad': l.wave = choice(t.pad); break;
+        case 'bass': l.wave = choice(t.bass); break;
+        case 'shimmer': l.wave = choice(['celesta', 'glockenspiel']); break;
+        default: break; // drums/devices: their `real` alternative (if any) was applied above
+      }
+    }
+    g.note(note('生楽器の録音（サンプル）', '実在の楽器の微細な揺らぎ・倍音・アタックは「人が演奏している」感覚を与え、身振りや声のように感情が伝わる「情動伝染」を起こしやすい。', 'juslin08'));
+  }
+
   function applyPalette(g) {
+    if (g.opts.palette === 'real') { applyRealPalette(g); return; }
     if (g.opts.palette !== 'chip') return;
     for (const l of g.layers) {
       if (l.wave === 'noise' || l.wave === 'shepard') continue;
@@ -956,6 +1081,7 @@ const EmotionGen = (() => {
     const key = nearestEmotion(v, a);
     const E = EMOTIONS[key];
     const g = makeContext(E, v, a, { palette });
+    g.key = key;
     const devices = E.devices.map((d) => DEVICES[d]);
 
     g.note(note(
@@ -982,6 +1108,7 @@ const EmotionGen = (() => {
     if (climax) applyClimax(g);
     applyPalette(g);
     trimLayers(g);
+    timbreNote(g);
     g.note(note(
       `残響 ${Math.round(g.reverb * 100)}%`,
       g.reverb > 0.5 ? '広い空間の響き：孤独・崇高・神秘の「視覚的イメージ」を強める。' : '乾いた近い音：親密さ・切迫感・現実感。',
@@ -992,7 +1119,7 @@ const EmotionGen = (() => {
     return {
       name: `${E.label} · ${keyName} ${g.scale.name} · ${g.bpm}BPM${climax ? ' · クライマックス' : ''}`,
       bpm: g.bpm, length, loop: true, reverb: Number(g.reverb.toFixed(2)), emotion: key,
-      layers: g.layers.map(({ priority, role, ...spec }) => spec),
+      layers: g.layers.map(({ priority, role, real, ...spec }) => spec),
       notes: g.notes,
     };
   }
@@ -1002,116 +1129,547 @@ const EmotionGen = (() => {
 
 /* ======================================================================
  * Sound-effect generator (one-shots, x/t in seconds at 240 BPM)
+ * Each effect is assembled from interchangeable building blocks:
+ *   pitch contour (+ optional modifier) × amplitude envelope × accent layers
+ * so every click produces a structurally different formula, not just new numbers.
  * ==================================================================== */
 const SFX_BPM = 240;
 const SFX_GAIN = 1.8;             // one-shots should cut through the music
+const CONSONANT = [4, 5, 7, 12];
+const DISSONANT = [1, 6, 11, 13];
+const TONE_SETS = {
+  major: [0, 4, 7, 12, 16, 19, 24],
+  minor: [0, 3, 7, 12, 15, 19, 24],
+  penta: [0, 2, 4, 7, 9, 12, 14, 16],
+  lydian: [0, 7, 14, 18, 21, 26, 30],
+  whole: [0, 2, 4, 6, 8, 10, 12],
+  dim: [0, 3, 6, 9, 12, 15, 18],
+};
+const FANFARES = [[0, 0, 0, 5, 9, 7, 12], [0, 4, 7, 12, 7, 12], [7, 7, 7, 12], [0, 2, 4, 5, 7, 12], [0, 7, 5, 4, 5, 7, 12]];
+
+const rf = (a, b, dp = 2) => +(a + Math.random() * (b - a)).toFixed(dp);
+const shuffle = (arr) => arr.map((v) => [Math.random(), v]).sort((p, q) => p[0] - q[0]).map((p) => p[1]);
+const fx = (v) => +v.toFixed(3);
+
+/** Pitch contours: y(t) in semitones. c = { p, d, dir, intervals, tones, freq() } */
+const SFX_CONTOURS = {
+  hold:      { label: '単音', make: (c) => `${c.p}` },
+  step2:     { label: '2音ステップ', make: (c) => `t < ${rf(0.04, Math.max(0.05, c.d * 0.3))} ? ${c.p} : ${c.p + c.dir * choice(c.intervals)}` },
+  step3:     { label: '3音ステップ', make: (c) => {
+    const a = c.dir * choice(c.intervals);
+    const b = a + c.dir * choice(c.intervals);
+    return `pick(min(floor(t*${rint(8, 16)}), 2), ${c.p}, ${c.p + a}, ${c.p + b})`;
+  } },
+  arp:       { label: 'アルペジオ', make: (c) => {
+    const set = TONE_SETS[c.tones];
+    const n = rint(3, Math.min(7, set.length));
+    const tones = c.dir < 0 ? set.slice(0, n).reverse() : set.slice(0, n);
+    return `pick(min(floor(t*${fx(n / (c.d * 0.6))}), ${n - 1}), ${tones.join(', ')}) + ${c.p}`;
+  } },
+  fanfare:   { label: 'ファンファーレ音型', make: (c) => {
+    const pat = choice(FANFARES);
+    return `pick(min(floor(t*${rf(5, 8, 1)}), ${pat.length - 1}), ${pat.join(', ')}) + ${c.p}`;
+  } },
+  sigh:      { label: '半音のため息＋垂れ下がり', make: (c) => {
+    const a = fx(c.d * 0.5);
+    return `t < ${a} ? pick(floor(t*${fx(3 / a)}), 0, -1, -2) + ${c.p} : ${c.p - 3} - ${rf(0.8, 2, 1)}*(t - ${a})`;
+  } },
+  glide:     { label: '直線グライド', make: (c) => `${c.p} + ${c.dir * rint(12, 36)}*t/${fx(c.d)}` },
+  expGlide:  { label: '急速グライド', make: (c) => `${c.p} + ${c.dir * rint(12, 30)}*(1 - exp(-${rint(6, 20)}*t))` },
+  drop:      { label: '急降下（ピッチエンベロープ）', make: (c) => `${c.p} + ${rint(18, 40)}*exp(-${rint(10, 40)}*t)` },
+  trill:     { label: 'トリル', make: (c) => `${c.p} + ${choice(c.intervals)}*(frac(t*${c.freq(10, 24)}) < 0.5)` },
+  trillRise: { label: '上昇トリル', make: (c) => `${c.p} + ${choice(c.intervals)}*(frac(t*${rint(10, 20)}) < 0.5) + ${c.dir * rint(7, 19)}*t/${fx(c.d)}` },
+  stairs:    { label: '階段', make: (c) => `${c.p} + ${c.dir * choice([1, 2, 3, 4, 5])}*min(floor(t*${rint(8, 16)}), ${rint(5, 9)})` },
+  vibrato:   { label: 'ビブラート', make: (c) => `${c.p} + ${rf(0.2, 0.8)}*sin(2*pi*${c.freq(4, 7)}*t)` },
+  wobble:    { label: '三角波のゆらぎ', make: (c) => `${c.p} + ${rint(2, 7)}*tri(t*${c.freq(1, 6)})` },
+  siren:     { label: 'サイレン', make: (c) => `${c.p} + ${rint(4, 9)}*sin(2*pi*${c.freq(0.8, 3)}*t)` },
+  bounce:    { label: 'バウンド', make: (c) => `${c.p} + ${rint(7, 19)}*abs(cos(pi*t*${rf(3, 8, 1)}))*exp(-${rf(1, 4, 1)}*t)` },
+  jitter:    { label: 'ランダム音程', make: (c) => {
+    const vals = Array.from({ length: rint(5, 8) }, () => c.p + rint(-1, 1) * choice(c.intervals));
+    return `pick(floor(t*${c.freq(10, 28)}), ${vals.join(', ')})`;
+  } },
+};
+
+/** Optional modifiers appended to a contour. */
+const SFX_MODS = [
+  { label: 'ビブラート', make: (c) => ` + ${rf(0.2, 0.5)}*sin(2*pi*${c.freq(4.5, 7)}*t)` },
+  { label: 'ピッチの流れ', make: (c) => ` + ${c.dir * rint(2, 7)}*t/${fx(c.d)}` },
+  { label: 'ゆらぎ', make: (c) => ` + ${rint(1, 3)}*tri(t*${c.freq(2, 6)})` },
+];
+
+/** Amplitude envelopes a(t). */
+const SFX_ENVS = {
+  decay:   { label: '減衰', make: (c) => `exp(-${fx(rf(3, 7) / c.d)}*t)` },
+  gate:    { label: 'ゲート', make: (c) => `t < ${fx(c.d * 0.9)} ? 1 - 0.6*t/${fx(c.d)} : 0` },
+  ar:      { label: 'アタック＋減衰', make: (c) => {
+    const at = rf(0.02, Math.min(0.3, c.d * 0.3));
+    return `min(1, t/${at})*exp(-${fx(3 / c.d)}*max(t - ${at}, 0))`;
+  } },
+  swell:   { label: '膨らみ', make: (c) => `sin(pi*min(t/${fx(c.d)}, 1))` },
+  pulses:  { label: '断続', make: (c) => `(frac(t*${c.freq(6, 16)}) < ${rf(0.3, 0.7, 1)})*${c.loop ? 1 : `exp(-${fx(2 / c.d)}*t)`}` },
+  echo:    { label: 'エコー反復', make: (c) => `exp(-${rint(10, 25)}*frac(t*${c.freq(3, 8)}))*exp(-${fx(3 / c.d)}*t)` },
+  tremolo: { label: 'トレモロ', make: (c) => `(0.6 + 0.4*sin(2*pi*${c.freq(5, 12)}*t))${c.loop ? '' : `*exp(-${fx(2 / c.d)}*t)`}` },
+  cresc:   { label: 'クレッシェンド', make: (c) => `min(1, 0.15 + t/${fx(c.d)})` },
+  accel:   { label: '加速する断続', make: () => `frac(${rf(2, 4, 1)}*t + ${rf(1, 3, 1)}*t^2) < 0.25` },
+};
+
+/** Accent layers. `main` is the main layer spec (some accents derive from it). */
+const timeShift = (s, d) => s.replace(/\bt\b/g, `(t - ${d})`);
+const SFX_ACCENTS = {
+  click:      { label: 'クリック', make: () => ({ expr: `${rint(48, 56)}`, amp: `exp(-${rint(50, 90)}*t)`, wave: 'noise', vol: 0.35, realAlt: { expr: `${rint(14, 24)}`, wave: 'woodblock' } }) },
+  thump:      { label: '低音の衝撃', make: () => ({ expr: `-36 + ${rint(8, 16)}*exp(-30*t)`, amp: `exp(-${rint(6, 12)}*t)`, wave: 'sine', vol: 0.7, realAlt: { expr: `${rint(-27, -18)}`, wave: choice(['taiko_drum', 'timpani']), amp: '1' } }) },
+  sub:        { label: 'サブベース', make: (c) => ({ expr: `${c.p - 24}`, amp: `exp(-${fx(2 / c.d)}*t)`, wave: 'sine', vol: 0.4, realAlt: { wave: 'contrabass' } }) },
+  sparkle:    { label: 'きらめき', make: (c) => ({ expr: `${c.p + 24} + pick(floor(t*${rint(8, 16)}), ${shuffle([0, 7, 12, 16, 19]).join(', ')})`, amp: `exp(-${rf(2, 5, 1)}*t)`, wave: choice(['bell', 'musicbox']), vol: 0.18 }) },
+  ring:       { label: '金属の響き', make: (c) => ({ expr: `${c.p + rint(10, 19)}`, amp: `exp(-${rint(5, 10)}*t)`, wave: 'bell', vol: 0.25 }) },
+  octave:     { label: 'オクターブ重ね', make: (c, main) => ({ expr: `(${main.expr}) + 12`, amp: main.amp, wave: choice(c.waves), vol: 0.2 }) },
+  echo:       { label: 'ディレイ', make: (c, main) => {
+    const d = rf(0.08, 0.2);
+    return { expr: timeShift(main.expr, d), amp: `t < ${d} ? 0 : 0.5*(${timeShift(main.amp, d)})`, wave: main.wave, vol: fx(main.vol * 0.6) };
+  } },
+  twin:       { label: 'うなり（微小デチューン）', make: (c, main) => ({ expr: `(${main.expr}) + ${rf(0.2, 0.5)}`, amp: main.amp, wave: choice(['rough', 'sawtooth', 'square']), vol: fx(main.vol * 0.6) }) },
+  noiseSweep: { label: '風切りノイズ', make: (c) => ({ expr: `${rint(20, 30)} + ${c.dir * rint(10, 24)}*t/${fx(c.d)}`, amp: `sin(pi*min(t/${fx(c.d)}, 1))`, wave: 'noise', vol: 0.35 }) },
+  burst:      { label: 'ノイズの破裂', make: () => ({ expr: `${rint(36, 48)} - ${rint(8, 20)}*t`, amp: `exp(-${rf(2, 6, 1)}*t)`, wave: 'noise', vol: 0.6 }) },
+  choirPad:   { label: '声のパッド', make: (c) => ({ expr: `${c.p - 12}`, amp: `sin(pi*min(t/${fx(c.d)}, 1))`, wave: 'choir', vol: 0.25 }) },
+};
+
+const NOTE_STRUCTURE = '音程の動き × 音量の形 × 重ねる層 を部品から組み合わせて生成。押すたびに数式の形そのものが変わる。';
 
 function sfxSong(name, dur, reverb, layers, notes, loop = false) {
   return {
     name: `SFX · ${name}`, bpm: SFX_BPM, length: Math.max(1, Math.ceil((dur * SFX_BPM) / 60)),
-    loop, reverb, layers: layers.map((l) => ({ env: 'hold', ...l, vol: Math.min(1, l.vol * SFX_GAIN) })), notes,
+    loop, reverb, notes,
+    layers: layers.slice(0, MAX_LAYERS).map(({ keep, realAlt, ...l }) => ({ env: 'hold', ...l, vol: Math.min(1, l.vol * SFX_GAIN) })),
   };
 }
 
+/** Shared context for one effect. Loops get whole-quarter-second lengths and LFO rates that fit them. */
+function sfxContext(spec) {
+  const loop = !!spec.loop;
+  let d = rf(spec.dur[0], spec.dur[1]);
+  if (loop) d = Math.max(0.5, Math.round(d * 4) / 4);
+  const c = {
+    d, loop, p: rint(spec.base[0], spec.base[1]),
+    dir: spec.dir ?? choice([1, -1]), intervals: spec.intervals ?? CONSONANT,
+    tones: choice([].concat(spec.tones ?? 'major')), waves: spec.waves,
+  };
+  // LFO/rhythm rate; for loops snap to a whole number of cycles per loop (reads c.d, which custom builders may change)
+  c.freq = (lo, hi) => (c.loop ? fx(Math.max(1, Math.round(rf(lo, hi) * c.d)) / c.d) : rf(lo, hi, 1));
+  return c;
+}
+
+/** Synth -> recorded counterparts used by the SFX "リアル" mode. Noise/shepard stay synthetic. */
+const REAL_SFX_WAVES = {
+  sine: ['gm_piano', 'kalimba', 'celesta'], triangle: ['marimba', 'kalimba'], square: ['glockenspiel', 'marimba'],
+  pulse25: ['glockenspiel', 'celesta', 'tinkle_bell'], pulse12: ['celesta', 'glockenspiel'],
+  sawtooth: ['strings_real', 'trumpet'], supersaw: ['strings_real', 'trumpet', 'french_horn'], epiano: ['gm_piano', 'kalimba'],
+  bell: ['tubular_bells', 'celesta', 'glockenspiel'], musicbox: ['music_box_real', 'celesta'], choir: ['choir_real'],
+  flute: ['flute_real', 'ocarina', 'pan_flute'], strings: ['strings_real', 'violin', 'cello'], pad: ['strings_real', 'choir_real'],
+  organ: ['church_organ'], rough: ['tremolo_strings', 'violin'], cluster: ['tremolo_strings', 'church_organ'],
+};
+
+function toRealSfxLayer(layer) {
+  if (layer.keep) return layer;
+  if (layer.realAlt) return { ...layer, ...layer.realAlt };
+  const pool = REAL_SFX_WAVES[layer.wave];
+  return pool ? { ...layer, wave: choice(pool) } : layer;
+}
+
+function buildSfx(spec, real = false) {
+  const c = sfxContext(spec);
+  let layers;
+  let structure;
+  if (spec.custom) {
+    ({ layers, structure } = spec.custom(c));
+  } else {
+    const contourKey = choice(spec.contours);
+    let expr = SFX_CONTOURS[contourKey].make(c);
+    let mod = '';
+    if (spec.mods && chance(spec.mods)) {
+      const m = choice(SFX_MODS);
+      expr = `${expr.includes('?') ? `(${expr})` : expr}${m.make(c)}`;
+      mod = `＋${m.label}`;
+    }
+    const envKey = choice(spec.envs);
+    const main = { expr, amp: SFX_ENVS[envKey].make(c), wave: choice(spec.waves), vol: spec.vol ?? 0.5 };
+    const forced = spec.forced ?? [];
+    const extra = shuffle((spec.accents ?? []).filter((k) => !forced.includes(k))).slice(0, rint(...(spec.accentCount ?? [0, 2])));
+    const accents = [...forced, ...extra];
+    layers = [main, ...accents.map((k) => SFX_ACCENTS[k].make(c, main))];
+    structure = [`${SFX_CONTOURS[contourKey].label}${mod}`, SFX_ENVS[envKey].label, ...accents.map((k) => SFX_ACCENTS[k].label)].join(' × ');
+  }
+  if (real) layers = layers.map(toRealSfxLayer);
+  const notes = [note(`構造：${structure}`, NOTE_STRUCTURE, ''), ...[].concat(spec.why)];
+  if (real && layers.some((l) => INSTRUMENTS[l.wave]?.kind === 'sample')) notes.push(note('録音素材', `${SOUNDFONT_CREDIT}。合成音の部品を実在の楽器・環境音の録音に置き換えて鳴らしている。`, ''));
+  const reverb = spec.reverb ? rf(spec.reverb[0], spec.reverb[1]) : 0.2;
+  const tail = c.loop ? 0 : 0.25;
+  return sfxSong(spec.label, c.d + tail, reverb, layers, notes, c.loop);
+}
+
+/* ----- Custom builders for effects that need a specific structure ----- */
+function heartbeatSfx(c) {
+  const beatsPerLoop = 4;
+  const loopBeats = rint(9, 14);                // loop length in 1/4 s units
+  const h = fx((beatsPerLoop * 4) / loopBeats);  // heartbeats per second
+  c.d = loopBeats / 4;
+  const variant = choice(['steady', 'steady', 'accel', 'skip', 'single']);
+  const labels = { steady: '一定', accel: '加速', skip: '不整脈', single: '単拍' };
+  c.loop = variant !== 'accel';
+  const phase = variant === 'accel' ? `(${h}*t + ${rf(0.08, 0.25)}*t^2)` : `(${h}*t)`;
+  const u = `frac(${phase})`;
+  let amp = variant === 'single' ? `exp(-22*${u})` : `${u} < 0.15 ? exp(-25*${u}) : 0.7*exp(-25*(${u} - 0.15))`;
+  if (variant === 'skip') amp = `pick(floor(${phase}), 1, 1, 1, 0, 1, 1, 1, 0.5)*(${amp})`;
+  const layers = [{ expr: `${rint(-44, -38)} + ${rint(3, 7)}*exp(-30*${u})`, amp, wave: 'sine', vol: 0.95, keep: true }];
+  const extras = [];
+  if (chance(0.4)) { layers.push({ expr: `${rint(46, 52)}`, amp: `0.15 + 0.05*sin(2*pi*${c.freq(0.2, 0.5)}*t)`, wave: 'sine', vol: 0.1, keep: true }); extras.push('耳鳴り'); }
+  if (chance(0.4)) { layers.push({ expr: `${rint(-6, 2)}`, amp: `0.3*(${amp})`, wave: 'noise', vol: 0.3 }); extras.push('体内の響き'); }
+  return { layers, structure: [`鼓動（${labels[variant]}・${Math.round(h * 60)}回/分）`, ...extras].join(' × ') };
+}
+
+function droneSfx(c) {
+  const R = c.freq(0.5, 1);
+  const pool = {
+    wind: () => ({ expr: `${rint(4, 12)} + ${rint(6, 12)}*sin(2*pi*${c.freq(0.15, 0.3)}*t) + ${rint(2, 5)}*sin(2*pi*${c.freq(0.5, 0.8)}*t)`, amp: `0.5 + 0.35*sin(2*pi*${c.freq(0.1, 0.25)}*t)`, wave: 'noise', vol: 0.5 }),
+    cluster: () => ({ expr: `${rint(-34, -24)}`, amp: `0.4 + 0.25*sin(2*pi*${c.freq(0.08, 0.15)}*t)`, wave: 'cluster', vol: 0.4 }),
+    whisper: () => ({ expr: `${rint(36, 44)} + 4*sin(2*pi*${c.freq(0.2, 0.5)}*t)`, amp: `(0.5 + 0.5*sin(2*pi*${c.freq(5, 9)}*t))*(0.4 + 0.4*sin(2*pi*${c.freq(0.1, 0.3)}*t))`, wave: 'noise', vol: 0.25 }),
+    rumble: () => ({ expr: `${rint(-44, -38)} + tri(t*${c.freq(0.1, 0.3)})`, amp: '0.7', wave: 'sine', vol: 0.5, keep: true }),
+    ghost: () => ({ expr: `${rint(20, 30)} + pick(floor(t*${R}), 0, 6, 1, 11)`, amp: `pick(floor(t*${R}), 1, 0, 0, 1, 0)*exp(-1.5*frac(t*${R}))`, wave: 'bell', vol: 0.2 }),
+    beating: () => ({ expr: `${rint(-18, -10)} + 0.25*(frac(t*${c.freq(0.2, 0.4)}) < 0.5)`, amp: '0.5', wave: 'organ', vol: 0.3 }),
+  };
+  const labels = { wind: '風', cluster: '不協和の低音', whisper: 'ささやき', rumble: '地鳴り', ghost: '遠くの金属音', beating: '揺れるオルガン' };
+  const keys = shuffle(Object.keys(pool)).slice(0, rint(2, 3));
+  return { layers: keys.map((k) => pool[k]()), structure: keys.map((k) => labels[k]).join(' × ') };
+}
+
+function shepardSfx(c) {
+  const p = choice([2, 3, 4]);
+  c.d = p * 2;
+  const variants = {
+    rise: { expr: `12*frac(t/${p})`, label: '連続上昇' },
+    fall: { expr: `12 - 12*frac(t/${p})`, label: '連続下降' },
+    steps: { expr: `floor(12*frac(t/${p}))`, label: '半音階段の上昇' },
+  };
+  const key = choice(Object.keys(variants));
+  const layers = [{ expr: variants[key].expr, amp: '1', wave: 'shepard', vol: 0.6 }];
+  const extras = [];
+  if (chance(0.5)) { layers.push({ expr: 'frac(t*2) < 0.5 ? 60 : 56', amp: 'exp(-30*frac(t*2))', wave: 'noise', vol: 0.15 }); extras.push('時計の刻み'); }
+  if (chance(0.4)) { layers.push({ expr: `${rint(-40, -34)}`, amp: '0.5', wave: 'sine', vol: 0.4, keep: true }); extras.push('持続低音'); }
+  return { layers, structure: [`シェパード音（${variants[key].label}）`, ...extras].join(' × ') };
+}
+
+function footstepsSfx(c) {
+  const R = choice([1, 1.6, 2]);
+  c.d = 8 / R;
+  const pattern = Array.from({ length: 8 }, () => (chance(0.75) ? 1 : 0));
+  pattern[0] = 1;
+  const amp = `pick(floor(t*${R}), ${pattern.join(', ')})*exp(-${rint(14, 24)}*frac(t*${R}))`;
+  const layers = [{ expr: `${rint(-2, 8)}`, amp, wave: 'noise', vol: 0.6 }];
+  const extras = [];
+  if (chance(0.6)) { layers.push({ expr: `${rint(-40, -34)}`, amp, wave: 'sine', vol: 0.6, keep: true }); extras.push('床の低音'); }
+  if (chance(0.4)) { layers.push({ expr: `${rint(-30, -24)}`, amp: '0.4', wave: 'cluster', vol: 0.25 }); extras.push('不協和の持続音'); }
+  return { layers, structure: [`足音（${Math.round(R * 60)}歩/分・不規則）`, ...extras].join(' × ') };
+}
+
+/* ----- Effects built from recorded material (soundfont sound-effect samples) ----- */
+function gunshotSfx(c) {
+  const variant = choice(['single', 'double', 'burst', 'distant']);
+  const labels = { single: '単発', double: '2連射', burst: '連射', distant: '遠くの銃声' };
+  const y = rint(-4, 3);
+  const expr = {
+    single: `${y}`,
+    double: `t < 0.18 ? ${y} : t < 0.22 ? NaN : ${y + rint(-1, 1)}`,
+    burst: `frac(t*${rf(8, 12, 1)}) < 0.7 and t < 0.5 ? ${y} + pick(floor(t*10), 0, -1, 1, 0, -1) : NaN`,
+    distant: `${y - 5}`,
+  }[variant];
+  c.d = variant === 'burst' ? 1 : 1.3;
+  const main = { expr, amp: variant === 'distant' ? '0.35' : '1', wave: 'gunshot', vol: 0.6 };
+  const layers = [main];
+  const extras = [];
+  if (variant !== 'distant' && chance(0.6)) { layers.push({ expr: `${rint(-27, -20)}`, amp: 'exp(-6*t)', wave: 'taiko_drum', vol: 0.4 }); extras.push('低音の衝撃'); }
+  if (variant === 'distant' || chance(0.4)) { layers.push(SFX_ACCENTS.echo.make(c, main)); extras.push('反響'); }
+  return { layers, structure: [`銃声（${labels[variant]}）`, ...extras].join(' × ') };
+}
+
+function applauseSfx(c) {
+  c.d = rf(2.5, 4);
+  const variant = choice(['swell', 'burst', 'fade']);
+  const labels = { swell: '湧き上がる', burst: '一斉に', fade: 'まばらに消える' };
+  const amp = {
+    swell: `min(1, t/${fx(c.d * 0.4)})*(t < ${fx(c.d * 0.8)} ? 1 : max(0, 1 - (t - ${fx(c.d * 0.8)})/${fx(c.d * 0.2)}))`,
+    burst: `exp(-${rf(0.5, 1.2)}*t)`,
+    fade: `max(0, 1 - t/${fx(c.d)})`,
+  }[variant];
+  const layers = [{ expr: `${rint(-2, 2)}`, amp, wave: 'applause', vol: 0.6 }];
+  const extras = [];
+  if (chance(0.5)) { layers.push({ expr: `${rint(24, 31)} + pick(floor(t*${rint(6, 10)}), 0, 7, 12, 4, 9)`, amp: 'exp(-1.5*t)', wave: 'tinkle_bell', vol: 0.15 }); extras.push('祝福の鈴'); }
+  return { layers, structure: [`拍手（${labels[variant]}）`, ...extras].join(' × ') };
+}
+
+function birdsSfx(c) {
+  c.d = choice([4, 8]);
+  const songOf = () => Array.from({ length: 8 }, () => (chance(0.45) ? 'NaN' : rint(-3, 7)));
+  const R = choice([2, 4]);
+  const layers = [{ expr: `${rint(-2, 4)} + pick(floor(t*${R}), ${songOf().join(', ')})`, amp: '1', wave: 'bird_tweet', vol: 0.5 }];
+  const extras = [];
+  if (chance(0.6)) { layers.push({ expr: `${rint(4, 9)} + pick(floor(t*${R * 2}), ${songOf().join(', ')})`, amp: '0.6', wave: 'bird_tweet', vol: 0.35 }); extras.push('別の鳥'); }
+  if (chance(0.5)) { layers.push({ expr: `${rint(-8, 0)} + 4*sin(2*pi*${c.freq(0.1, 0.25)}*t)`, amp: `0.3 + 0.15*sin(2*pi*${c.freq(0.1, 0.2)}*t)`, wave: 'noise', vol: 0.25 }); extras.push('そよ風'); }
+  return { layers, structure: ['鳥のさえずり', ...extras].join(' × ') };
+}
+
+function seaSfx(c) {
+  c.d = choice([6, 8]);
+  const layers = [{ expr: `${rint(-3, 0)}`, amp: `0.55 + 0.45*sin(2*pi*${c.freq(0.1, 0.2)}*t)`, wave: 'seashore', vol: 0.6 }];
+  const extras = [];
+  if (chance(0.4)) { layers.push({ expr: `${rint(-8, -3)} + pick(floor(t*0.5), 0, NaN, 3, NaN)`, amp: '0.5', wave: 'bird_tweet', vol: 0.25 }); extras.push('遠くの海鳥'); }
+  if (chance(0.4)) { layers.push({ expr: `${rint(0, 8)} + 6*sin(2*pi*${c.freq(0.1, 0.3)}*t)`, amp: `0.3 + 0.2*sin(2*pi*${c.freq(0.05, 0.15)}*t)`, wave: 'noise', vol: 0.25 }); extras.push('潮風'); }
+  return { layers, structure: ['波の音', ...extras].join(' × ') };
+}
+
+function helicopterSfx(c) {
+  const variant = choice(['pass', 'approach', 'hover']);
+  const labels = { pass: '通過（ドップラー）', approach: '接近', hover: 'ホバリング' };
+  c.d = variant === 'hover' ? 4 : rf(3, 5);
+  c.loop = variant === 'hover';
+  const d = fx(c.d);
+  const spec = {
+    pass: { expr: `2 - 4*t/${d}`, amp: `exp(-((t - ${fx(c.d / 2)})/${fx(c.d / 4)})^2)` },
+    approach: { expr: `1.5*t/${d}`, amp: `min(1, (t/${d})^2 + 0.05)` },
+    hover: { expr: `0.3*sin(2*pi*${c.freq(0.2, 0.5)}*t)`, amp: '0.8' },
+  }[variant];
+  return { layers: [{ ...spec, wave: 'helicopter', vol: 0.6 }], structure: `ヘリコプター（${labels[variant]}）` };
+}
+
+function phoneSfx(c) {
+  const P = choice([2, 3]);
+  c.d = P * 2;
+  const on = rf(0.8, 1.2, 1);
+  const variant = choice(['single', 'double']);
+  const expr = variant === 'single'
+    ? `frac(t/${P}) < ${fx(on / P)} ? 0 : NaN`
+    : `frac(t/${P}) < ${fx(0.4 / P)} or (frac(t/${P}) > ${fx(0.6 / P)} and frac(t/${P}) < ${fx(1 / P)}) ? 0 : NaN`;
+  return { layers: [{ expr, amp: '1', wave: 'telephone_ring', vol: 0.5 }], structure: `電話のベル（${variant === 'single' ? '長い呼び出し' : '2回ずつ'}・${P}秒周期）` };
+}
+
+function breathSfx(c) {
+  const R = choice([0.25, 0.5, 1]);
+  const labels = { 0.25: '静かな呼吸', 0.5: '緊張した呼吸', 1: 'パニックの呼吸' };
+  c.d = 8;
+  const u = `frac(t*${R})`;
+  const layers = [{ expr: `${u} < 0.75 ? ${rint(-3, 2)} + pick(floor(t*${R}*2), 0, -2) : NaN`, amp: `sin(pi*min(${u}/0.75, 1))`, wave: 'breath_noise', vol: 0.6 }];
+  const extras = [];
+  if (R >= 0.5 && chance(0.5)) {
+    layers.push({ expr: '-42 + 4*exp(-30*frac(t*1.5))', amp: 'frac(t*1.5) < 0.16 ? exp(-28*frac(t*1.5)) : 0.7*exp(-28*(frac(t*1.5) - 0.16))', wave: 'sine', vol: 0.8, keep: true });
+    extras.push('鼓動');
+  }
+  if (chance(0.4)) { layers.push({ expr: `${rint(-30, -24)}`, amp: '0.35', wave: 'tremolo_strings', vol: 0.3 }); extras.push('トレモロ弦の持続音'); }
+  return { layers, structure: [labels[R], ...extras].join(' × ') };
+}
+
+function reverseCymbalSfx(c) {
+  const D = rf(1, 1.6);
+  c.d = D + 1.5;
+  const layers = [{ expr: `t < ${D} ? ${rint(-2, 2)} : NaN`, amp: `min(1, (t/${D})^2)`, wave: 'reverse_cymbal', vol: 0.6 }];
+  const impact = choice([
+    { expr: `t < ${D} ? NaN : ${rint(-27, -20)}`, amp: `exp(-2*(t - ${D}))`, wave: 'taiko_drum', vol: 0.7, label: '和太鼓の一撃' },
+    { expr: `t < ${D} ? NaN : ${rint(-24, -18)}`, amp: `exp(-1.5*(t - ${D}))`, wave: 'timpani', vol: 0.7, label: 'ティンパニの一撃' },
+    { expr: `t < ${D} ? NaN : ${rint(-12, -5)}`, amp: `exp(-1.2*(t - ${D}))`, wave: 'strings_real', vol: 0.5, label: '弦の強奏' },
+  ]);
+  const { label, ...spec } = impact;
+  layers.push(spec);
+  return { layers, structure: `逆再生シンバル（溜め ${D}秒） × ${label}` };
+}
+
+function taikoSfx(c) {
+  const R = choice([4, 8]);
+  c.d = R === 4 ? choice([2, 4]) : choice([1, 2]);
+  const pattern = () => Array.from({ length: 8 }, (_, i) => (i === 0 || chance(0.55) ? 1 : 0));
+  const env = R === 4 ? '1' : '2';
+  const layers = [{ expr: `pick(floor(t*${R}), ${pattern().join(', ')}) < 1 ? NaN : ${rint(-24, -18)}`, amp: '1', wave: 'taiko_drum', env, vol: 0.7 }];
+  const extras = [];
+  if (chance(0.6)) { layers.push({ expr: `pick(floor(t*${R}), ${pattern().join(', ')}) < 1 ? NaN : ${rint(-14, -8)}`, amp: '0.6', wave: 'taiko_drum', env, vol: 0.5 }); extras.push('高い太鼓'); }
+  if (chance(0.3)) { layers.push({ expr: `pick(floor(t*${R}), 1, 0, 0, 0, 1, 0, 0, 0) < 1 ? NaN : -20`, amp: '0.8', wave: 'timpani', env, vol: 0.4 }); extras.push('ティンパニ'); }
+  return { layers, structure: [`和太鼓（${R === 4 ? '重い4分刻み' : '速い8分刻み'}）`, ...extras].join(' × ') };
+}
+
+function timpaniRollSfx(c) {
+  const D = rf(1.2, 2.4);
+  c.d = D + 1.6;
+  const y = rint(-24, -17);
+  const layers = [
+    { expr: `t < ${D} ? ${y} : NaN`, amp: `min(1, 0.12 + t/${D})`, wave: 'timpani', env: '4', vol: 0.5 },
+    { expr: `t < ${D} ? NaN : ${y}`, amp: `exp(-1.5*(t - ${D}))`, wave: 'timpani', vol: 0.8 },
+  ];
+  const extras = [];
+  if (chance(0.6)) {
+    const chord = choice([[0, 4, 7], [0, 3, 7]]);
+    layers.push({ expr: `t < ${D} ? NaN : ${y + 24} + ${chord[1]}*(frac(t*20) < 0.33) + ${chord[2]}*(frac(t*20) >= 0.66)`, amp: `exp(-1.2*(t - ${D}))`, wave: 'strings_real', vol: 0.4 });
+    extras.push(chord[1] === 4 ? '弦の長和音' : '弦の短和音');
+  }
+  return { layers, structure: ['ティンパニのロール → 一撃', ...extras].join(' × ') };
+}
+
 const SFX = [
-  { group: '快・報酬', label: 'コイン', make() {
-    const p = rint(12, 19);
-    return sfxSong('コイン', 0.6, 0.15, [
-      { expr: `t < 0.07 ? ${p} : ${p + choice([5, 7])}`, amp: 'exp(-7*max(t - 0.07, 0))', wave: choice(['pulse25', 'square']), vol: 0.5 },
-    ], [note('短い上行・協和音程', '上行する完全4度/5度は「成功・獲得」の合図。ゲーム内で報酬と反復して結びつくことで快の反応が強化される（評価条件付け）。', 'juslin08')]);
-  } },
-  { group: '快・報酬', label: 'ジャンプ', make() {
-    const p = rint(-6, 2);
-    return sfxSong('ジャンプ', 0.3, 0.1, [
-      { expr: `${p} + 40*t`, amp: 't < 0.2 ? 1 - t/0.2 : 0', wave: choice(['square', 'pulse25']), vol: 0.45 },
-    ], [note('上昇グリッサンド', '音高の上昇は物理的な上昇・軽さと結びつく（音高と空間の対応）。', 'gabrielsson')]);
-  } },
-  { group: '快・報酬', label: 'レベルアップ', make() {
-    const b = rint(0, 7);
-    return sfxSong('レベルアップ', 1.5, 0.35, [
-      { expr: `pick(min(floor(t*14), 6), 0, 4, 7, 12, 16, 19, 24) + ${b}`, amp: 't < 0.5 ? 1 : exp(-3*(t - 0.5))', wave: 'pulse25', vol: 0.45 },
-      { expr: `${b - 12} + 12*(t > 0.5)`, amp: 'exp(-2*t)', wave: 'triangle', vol: 0.45 },
-    ], [note('長三和音の上行アルペジオ', '長和音の構成音を駆け上がる：達成・成長の比喩。長調＋上行＋速い動きは「喜び」の手掛かりの組み合わせ。', 'gabrielsson')]);
-  } },
-  { group: '快・報酬', label: '回復', make() {
-    const b = rint(0, 7);
-    return sfxSong('回復', 1.3, 0.55, [
-      { expr: `${b} + 14*t + 0.25*sin(2*pi*6*t)`, amp: 'sin(pi*min(t/1.2, 1))', wave: 'sine', vol: 0.45 },
-      { expr: `${b + 24} + pick(floor(t*10), 0, 4, 7, 11, 14)`, amp: 'exp(-2*t)', wave: 'bell', vol: 0.2 },
-    ], [note('上昇＋ビブラート', 'ゆっくり浮かび上がる音と6Hz前後のビブラート（声の温かみ）。声に似た特徴は情動伝染を起こしやすい。', 'juslin08')]);
-  } },
-  { group: '快・報酬', label: '勝利ジングル', make() {
-    const b = rint(-2, 5);
-    return sfxSong('勝利ジングル', 2.2, 0.35, [
-      { expr: `pick(min(floor(t*7), 6), 0, 0, 0, 5, 9, 7, 12) + ${b}`, amp: 't > 0.85 ? exp(-1.2*(t - 0.85)) : (frac(t*7) < 0.75)', wave: choice(['supersaw', 'pulse25']), vol: 0.4 },
-      { expr: `${b - 24} + pick(min(floor(t*3.5), 3), 0, 5, 7, 0)`, amp: 'exp(-0.8*t)', wave: 'triangle', vol: 0.45 },
-    ], [note('ファンファーレ', '同音連打 → 上行4度 → 主音のオクターブ上で終止。長調の主和音への到達＝勝利・完結。', 'huron06')]);
-  } },
-  { group: '快・報酬', label: '決定・選択', make() {
-    const p = rint(10, 18);
-    return sfxSong('決定', 0.25, 0.1, [
-      { expr: `${p} + 7*(t > 0.04)`, amp: 'exp(-25*t)', wave: choice(['sine', 'epiano']), vol: 0.5 },
-    ], [note('短く高い協和音', '注意を引くが不快でない最小限の合図。耳障りにならないよう減衰を速くする。', 'mcdermott')]);
-  } },
-  { group: '驚異・神秘', label: '発見', make() {
-    const b = rint(0, 6);
-    return sfxSong('発見', 2.8, 0.75, [
-      { expr: `pick(min(floor(t*8), 5), 0, 7, 14, 18, 21, 26) + ${b}`, amp: 'exp(-0.9*t)', wave: 'bell', vol: 0.4 },
-      { expr: `${b - 12}`, amp: 'sin(pi*min(t/2.8, 1))', wave: 'choir', vol: 0.3 },
-    ], [note('リディアンの♯4', '♯4（増4度）を含む上行と広い残響：「魔法・神秘」の映画的慣習。広い空間の響きは視覚的イメージを喚起する。', 'zentner')]);
-  } },
-  { group: '不快・危険', label: 'ダメージ', make() {
-    const b = rint(0, 8);
-    return sfxSong('ダメージ', 0.5, 0.15, [
-      { expr: `${b} - 28*t`, amp: 'exp(-6*t)', wave: 'rough', vol: 0.5 },
-      { expr: '30 - 20*t', amp: 'exp(-14*t)', wave: 'noise', vol: 0.5 },
-    ], [note('下降＋ラフネス', '急な下行は落下・損失の比喩。振幅のザラつき（ラフネス）は警告・苦痛の音として即座に知覚される。', 'arnal')]);
-  } },
-  { group: '不快・危険', label: 'エラー・ブザー', make() {
-    return sfxSong('エラー', 0.5, 0.1, [
-      { expr: `${rint(-16, -10)}`, amp: '(frac(t*6) < 0.55)*(t < 0.42)', wave: 'cluster', vol: 0.5 },
-    ], [note('不協和クラスター', '半音でぶつかる低い音の塊は感覚的不協和が最大になる＝「拒否・失敗」の合図。', 'plomp')]);
-  } },
-  { group: '不快・危険', label: '警報（接近）', make() {
-    return sfxSong('警報', 2.5, 0.25, [
-      { expr: '14 + 7*sin(2*pi*1.6*t)', amp: 'min(1, 0.25 + 0.4*t)', wave: 'square', vol: 0.35 },
-      { expr: '14.5 + 7*sin(2*pi*1.6*t)', amp: 'min(1, 0.25 + 0.4*t)', wave: 'rough', vol: 0.2 },
-    ], [note('サイレン＋クレッシェンド', '音量が上がり続ける音は「接近してくる危険」と過大評価される（ルーミング・バイアス）。半音未満ずれた2音のうなりが不快さを足す。', 'neuhoff')], true);
-  } },
-  { group: '恐怖・緊張', label: 'ジャンプスケア', make() {
-    return sfxSong('ジャンプスケア', 2.2, 0.6, [
-      { expr: `${rint(-10, -6)} - 3*t`, amp: 'exp(-1.1*t)', wave: 'cluster', vol: 0.7 },
-      { expr: '44 - 10*t', amp: 'exp(-3*t)', wave: 'noise', vol: 0.6 },
-      { expr: `${rint(26, 32)} + 5*sin(2*pi*9*t) - 8*t`, amp: 'exp(-1.6*t)', wave: 'rough', vol: 0.4 },
-    ], [
+  /* ----- UI ----- */
+  { group: 'UI・操作', label: '決定', dur: [0.1, 0.25], base: [10, 22], dir: 1,
+    contours: ['hold', 'step2', 'expGlide'], envs: ['decay'], waves: ['sine', 'epiano', 'pulse12', 'triangle', 'bell'],
+    accents: ['click', 'octave'], accentCount: [0, 1],
+    why: note('短く明るい合図', '高めで協和的な短い音は注意を引くが不快でない。上向きの動きは「肯定」と結びつく。', 'mcdermott') },
+  { group: 'UI・操作', label: 'キャンセル', dur: [0.12, 0.3], base: [6, 16], dir: -1,
+    contours: ['step2', 'expGlide', 'hold'], envs: ['decay', 'gate'], waves: ['sine', 'square', 'triangle', 'pulse25'],
+    accents: ['click'], accentCount: [0, 1],
+    why: note('下向き＝否定', '下行する音は「戻る・取り消し」の合図として直感的に伝わる（音高の上下と意味の対応）。', 'gabrielsson') },
+  { group: 'UI・操作', label: 'カーソル', dur: [0.04, 0.1], base: [14, 26], dir: 1,
+    contours: ['hold', 'step2', 'expGlide'], envs: ['decay', 'gate'], waves: ['sine', 'pulse12', 'square', 'triangle', 'epiano'],
+    accents: ['click'], accentCount: [0, 1],
+    why: note('最小限のフィードバック', '頻繁に鳴る音ほど短く柔らかく。繰り返しても疲れない。', 'mcdermott') },
+  { group: 'UI・操作', label: '会話のテキスト送り', dur: [0.6, 1.2], base: [6, 16],
+    contours: ['jitter', 'jitter', 'trill', 'step3'], mods: 0.3, envs: ['pulses', 'echo'], waves: ['square', 'pulse25', 'triangle', 'sine', 'epiano', 'musicbox'],
+    accents: ['click', 'octave'], accentCount: [0, 1],
+    why: note('声の抑揚の模倣', 'ランダムな音程の短い断続音は話し声のリズムと抑揚を連想させ、キャラクターが「喋っている」感覚を生む。', 'juslin08') },
+
+  /* ----- Reward ----- */
+  { group: '快・報酬', label: 'コイン', dur: [0.35, 0.7], base: [12, 20], dir: 1,
+    contours: ['step2', 'step3', 'arp', 'trill', 'expGlide'], mods: 0.2, envs: ['decay', 'gate', 'echo'],
+    waves: ['pulse25', 'square', 'sine', 'bell', 'musicbox', 'epiano'], accents: ['sparkle', 'echo', 'click', 'octave'],
+    why: note('短い上行・協和音程', '上行する完全4度/5度は「獲得」の合図。ゲーム内で報酬と反復して結びつくことで快の反応が強化される（評価条件付け）。', 'juslin08') },
+  { group: '快・報酬', label: 'ジャンプ', dur: [0.18, 0.4], base: [-8, 4], dir: 1,
+    contours: ['glide', 'expGlide', 'bounce', 'stairs'], envs: ['gate', 'decay'], waves: ['square', 'pulse25', 'triangle', 'sine'],
+    accents: ['click', 'noiseSweep'], accentCount: [0, 1],
+    why: note('上昇＝軽さ', '音高の上昇は物理的な上昇・軽さと結びつく（音高と空間の対応）。', 'gabrielsson') },
+  { group: '快・報酬', label: 'レベルアップ', dur: [1, 1.8], base: [0, 8], dir: 1, tones: ['major', 'penta'],
+    contours: ['arp', 'stairs', 'trillRise', 'fanfare'], envs: ['ar', 'decay', 'echo'],
+    waves: ['pulse25', 'supersaw', 'bell', 'epiano', 'square'], accents: ['sparkle', 'octave', 'echo', 'sub', 'choirPad'], accentCount: [1, 3],
+    why: note('長調の上行', '長和音の構成音を駆け上がる：達成・成長の比喩。長調＋上行＋速い動きは「喜び」の手掛かりの組み合わせ。', 'gabrielsson') },
+  { group: '快・報酬', label: '回復', dur: [1, 1.6], base: [0, 8], dir: 1,
+    contours: ['expGlide', 'trillRise', 'arp', 'vibrato'], mods: 0.4, envs: ['swell', 'ar'],
+    waves: ['sine', 'choir', 'flute', 'pad'], accents: ['sparkle', 'octave', 'choirPad'],
+    why: note('浮かび上がる＋声の温かみ', 'ゆっくり上がる音と6Hz前後のビブラート。声に似た特徴は情動伝染を起こしやすい。', 'juslin08') },
+  { group: '快・報酬', label: '宝箱・アイテム', dur: [1, 1.8], base: [2, 10], dir: 1, tones: ['major', 'lydian'],
+    contours: ['arp', 'step3', 'fanfare'], envs: ['ar', 'decay'], waves: ['bell', 'musicbox', 'pulse25', 'epiano'],
+    accents: ['sparkle', 'sub', 'echo', 'choirPad'], accentCount: [1, 2],
+    why: note('期待 → 報酬', '短い上行のあとに長く響く和音で「開けた→手に入れた」という予期の解決を作る（ITPRAの報酬反応）。', 'huron06') },
+  { group: '快・報酬', label: 'パワーアップ', dur: [0.8, 1.4], base: [-4, 4], dir: 1,
+    contours: ['trillRise', 'stairs', 'glide'], envs: ['cresc', 'gate', 'ar'], waves: ['square', 'supersaw', 'pulse12', 'sawtooth'],
+    accents: ['octave', 'noiseSweep', 'sub'],
+    why: note('上昇＋加速', '上がり続ける音高と強まる音量＝エネルギーの増加（覚醒度の上昇）。', 'gabrielsson') },
+  { group: '快・報酬', label: '勝利ジングル', dur: [1.6, 2.4], base: [-2, 5], dir: 1,
+    contours: ['fanfare', 'arp'], envs: ['ar', 'gate'], waves: ['supersaw', 'pulse25', 'square', 'strings'],
+    accents: ['sub', 'octave', 'sparkle'], accentCount: [1, 2],
+    why: note('ファンファーレ', '同音連打 → 上行 → 主音のオクターブ上で終止。長調の主和音への到達＝勝利・完結。', 'huron06') },
+
+  /* ----- Wonder ----- */
+  { group: '驚異・神秘', label: '発見', dur: [1.8, 3], base: [0, 6], dir: 1, tones: ['lydian', 'whole'],
+    contours: ['arp', 'stairs'], envs: ['decay', 'swell', 'echo'], waves: ['bell', 'musicbox', 'choir'],
+    accents: ['sparkle', 'echo', 'choirPad', 'octave'], accentCount: [1, 2], reverb: [0.6, 0.8],
+    why: note('リディアンの♯4・全音音階', '♯4や全音音階の上行と広い残響：「魔法・神秘」の映画的慣習。広い空間の響きは視覚的イメージを喚起する。', 'zentner') },
+  { group: '驚異・神秘', label: '魔法詠唱', dur: [1.5, 3], base: [-2, 8],
+    contours: ['wobble', 'vibrato', 'trillRise', 'siren'], envs: ['swell', 'tremolo'], waves: ['choir', 'pad', 'flute', 'bell'],
+    accents: ['sparkle', 'noiseSweep', 'choirPad'], reverb: [0.5, 0.8],
+    why: note('揺らぐ音程と膨らむ音量', '「何かが形成されていく」動きの視覚的イメージを喚起する。', 'juslin08') },
+  { group: '驚異・神秘', label: 'ワープ・転送', dur: [0.8, 1.6], base: [-6, 6],
+    contours: ['glide', 'expGlide', 'wobble', 'stairs'], mods: 0.5, envs: ['swell', 'ar', 'tremolo'],
+    waves: ['sine', 'square', 'supersaw', 'pulse12'], accents: ['noiseSweep', 'echo', 'octave'],
+    why: note('大きな音高移動', '大きく連続的な音高の移動＝空間の移動の比喩（音高と空間の対応）。', 'gabrielsson') },
+  { group: '驚異・神秘', label: '氷・凍結', dur: [0.8, 1.5], base: [18, 28], tones: 'whole', intervals: [7, 12, 14, 19],
+    contours: ['jitter', 'arp', 'trill'], envs: ['decay', 'echo'], waves: ['bell', 'musicbox'],
+    accents: ['sparkle', 'click', 'noiseSweep'],
+    why: note('高く硬い金属音', '高音域で倍音が整数倍からずれた音（FM）は、冷たく硬い質感のイメージと結びつく。', 'juslin08') },
+
+  /* ----- Action ----- */
+  { group: 'アクション', label: 'ショット・レーザー', dur: [0.15, 0.4], base: [-6, 10], dir: -1,
+    contours: ['drop', 'expGlide'], envs: ['decay', 'gate'], waves: ['square', 'sawtooth', 'pulse12', 'rough'],
+    accents: ['click', 'echo', 'noiseSweep'],
+    why: note('急降下するピッチ', '高い音から急激に下がる音は「放たれて遠ざかる」動きを連想させる。', 'neuhoff') },
+  { group: 'アクション', label: '爆発', dur: [0.8, 1.8], base: [10, 26], dir: -1,
+    contours: ['drop', 'glide'], envs: ['decay', 'ar'], waves: ['noise'],
+    accents: ['sub', 'burst', 'echo'], forced: ['thump'], accentCount: [1, 2], reverb: [0.3, 0.6], vol: 0.6,
+    why: note('広帯域ノイズ＋低域', '突然の広帯域ノイズは驚愕反射を起こし、低音は大きさ・重さを伝える。', 'juslin08') },
+  { group: 'アクション', label: 'ダッシュ・回避', dur: [0.2, 0.5], base: [14, 30],
+    contours: ['glide', 'expGlide', 'drop', 'wobble'], envs: ['swell', 'ar', 'decay'], waves: ['noise'],
+    accents: ['click', 'noiseSweep', 'echo', 'thump'], accentCount: [0, 2],
+    why: note('風切り音', 'ノイズの帯域が動く音は素早い移動として知覚される。', 'neuhoff') },
+  { group: 'アクション', label: '斬撃', dur: [0.2, 0.45], base: [24, 36], dir: -1,
+    contours: ['glide', 'expGlide'], envs: ['ar', 'decay'], waves: ['noise'], accents: ['ring', 'click', 'thump'], accentCount: [1, 2],
+    why: note('鋭い立ち上がり＋金属音', '急峻なアタックと高い金属の響きで「刃」の硬さと速さを伝える。', 'juslin08') },
+  { group: 'アクション', label: 'スイッチ・扉', dur: [0.25, 0.6], base: [-12, 4], dir: -1,
+    contours: ['hold', 'step2', 'drop'], envs: ['decay', 'gate'], waves: ['square', 'triangle', 'pulse12'],
+    forced: ['click'], accents: ['thump', 'echo'], accentCount: [0, 1],
+    why: note('機械的な手応え', 'クリックと低音の組み合わせで物理的な「カチッ・ゴトン」という手応えを想像させる。', 'juslin08') },
+
+  /* ----- Unpleasant / danger ----- */
+  { group: '不快・危険', label: 'ダメージ', dur: [0.3, 0.7], base: [-2, 10], dir: -1, intervals: DISSONANT,
+    contours: ['drop', 'glide', 'jitter', 'step2'], envs: ['decay', 'pulses'], waves: ['rough', 'cluster', 'square', 'sawtooth'],
+    accents: ['burst', 'thump', 'twin', 'click'], accentCount: [1, 2],
+    why: note('下降＋ラフネス', '急な下行は落下・損失の比喩。振幅のザラつき（ラフネス）は警告・苦痛の音として即座に知覚される。', 'arnal') },
+  { group: '不快・危険', label: 'エラー・ブザー', dur: [0.3, 0.6], base: [-18, -6], intervals: DISSONANT,
+    contours: ['hold', 'step2', 'trill'], envs: ['pulses', 'gate'], waves: ['cluster', 'rough', 'square'],
+    accents: ['twin', 'sub'], accentCount: [0, 1],
+    why: note('不協和', '半音でぶつかる低い音は感覚的不協和が最大になる＝「拒否・失敗」の合図。', 'plomp') },
+  { group: '不快・危険', label: '警報', dur: [2, 3], base: [8, 18], intervals: [6, 1, 11], loop: true,
+    contours: ['siren', 'trill'], envs: ['tremolo', 'pulses'], waves: ['square', 'rough', 'sawtooth'],
+    accents: ['twin', 'sub', 'octave'],
+    why: note('サイレン＋うなり', '周期的に上下する音は注意を捕まえて離さない。半音未満ずれた音のうなりが不快さを足す。', 'neuhoff') },
+  { group: '不快・危険', label: '毒・状態異常', dur: [0.8, 1.5], base: [-6, 6], dir: -1, intervals: DISSONANT,
+    contours: ['wobble', 'glide', 'vibrato'], mods: 0.6, envs: ['tremolo', 'pulses', 'decay'],
+    waves: ['rough', 'organ', 'sawtooth', 'cluster'], accents: ['twin', 'burst'],
+    why: note('うねる音程とうなり', '不安定に揺れる音程と調和しないうなり＝「不調・気持ち悪さ」のイメージ。', 'mcdermott') },
+  { group: '不快・危険', label: '時間切れ', dur: [2, 3], base: [12, 24], intervals: [12, 7],
+    contours: ['hold', 'step2', 'trill', 'stairs', 'siren'], envs: ['accel'], waves: ['square', 'pulse12', 'sine', 'bell'],
+    accents: ['click', 'sub', 'twin'], accentCount: [0, 2],
+    why: note('加速する断続音', '間隔がだんだん詰まる音は「締め切りが迫る」切迫感を生む（予期の高まり）。', 'huron06') },
+
+  /* ----- Fear / tension ----- */
+  { group: '恐怖・緊張', label: 'ジャンプスケア', dur: [1.5, 2.5], base: [-12, 4], intervals: DISSONANT,
+    contours: ['drop', 'jitter', 'siren', 'hold'], envs: ['decay', 'ar'], waves: ['cluster', 'rough'],
+    forced: ['burst'], accents: ['thump', 'twin', 'octave'], accentCount: [1, 2], reverb: [0.5, 0.7], vol: 0.7,
+    why: [
       note('脳幹反射を突く', '突然・大音量・広帯域・不協和の音は、意味を理解する前に驚愕反射を起こす。直前に静寂を置くと効果が最大になる。', 'juslin08'),
       note('非線形な音', 'ノイズ・急な音高変化・ザラつきは動物の警戒声の特徴で、映画音楽でも恐怖を強める。', 'blumstein'),
-    ]);
-  } },
-  { group: '恐怖・緊張', label: '心臓の鼓動', make() {
-    const hz = choice([1.2, 1.4, 1.6]);
-    return sfxSong('心臓の鼓動', 4 / hz, 0.2, [
-      { expr: `-40 + 5*exp(-30*frac(t*${hz}))`, amp: `frac(t*${hz}) < 0.15 ? exp(-25*frac(t*${hz})) : 0.7*exp(-25*(frac(t*${hz}) - 0.15))`, wave: 'sine', vol: 0.95 },
-    ], [note(`鼓動 ${Math.round(hz * 60)} 回/分`, '聴き手の身体リズムは外部の拍に引き込まれる（リズム同調）。安静時より速い鼓動は不安・緊張を高める。', 'juslin08')], true);
-  } },
-  { group: '恐怖・緊張', label: '不穏な風', make() {
-    return sfxSong('不穏な風', 6, 0.6, [
-      { expr: '8 + 10*sin(2*pi*0.23*t) + 4*sin(2*pi*0.61*t)', amp: '0.5 + 0.35*sin(2*pi*0.17*t)', wave: 'noise', vol: 0.5 },
-      { expr: `${rint(-32, -26)}`, amp: '0.4 + 0.2*sin(2*pi*0.11*t)', wave: 'cluster', vol: 0.35 },
-    ], [note('うごめく低音と風', '周期の合わない複数のゆらぎで予測できない動きを作り、低い不協和音で「見えない何か」を暗示する。', 'huron06')], true);
-  } },
-  { group: '恐怖・緊張', label: '無限上昇', make() {
-    return sfxSong('無限上昇', 6, 0.4, [
-      { expr: '12*frac(t/3)', amp: 'min(1, t/1.5)', wave: 'shepard', vol: 0.6 },
-    ], [note('シェパード・トーン', '永遠に上がり続ける錯覚。解決しない上昇は緊張を持続させる（ループで使える）。', 'shepard')], true);
-  } },
-  { group: '悲しみ', label: 'ゲームオーバー', make() {
-    const b = rint(-6, 2);
-    return sfxSong('ゲームオーバー', 2.9, 0.4, [
-      { expr: `t < 1.5 ? pick(floor(t*2), 0, -1, -2) + ${b} : ${b - 3} + 0.35*sin(2*pi*5*t) - 1.2*(t - 1.5)`, amp: 't < 1.5 ? 0.9 : max(0, 1 - (t - 1.5)/1.3)', wave: choice(['strings', 'sawtooth']), vol: 0.45 },
-    ], [note('半音ずつ下がる「ため息」', '半音下行はため息の音型。低く、狭く、遅く下がっていく旋律は悲しみの典型的な特徴。', 'huron08')]);
-  } },
-];
+    ] },
+  { group: '恐怖・緊張', label: '心臓の鼓動', dur: [3, 3], base: [0, 0], loop: true, custom: heartbeatSfx, reverb: [0.1, 0.3],
+    why: note('鼓動への同調', '聴き手の身体リズムは外部の拍に引き込まれる（リズム同調）。速い・乱れた鼓動は不安を高める。', 'juslin08') },
+  { group: '恐怖・緊張', label: '不穏な環境音', dur: [6, 8], base: [0, 0], loop: true, custom: droneSfx, reverb: [0.5, 0.75],
+    why: note('予測できないゆらぎ', '周期の合わない複数のゆらぎと低い不協和音で「見えない何か」を暗示する。', 'huron06') },
+  { group: '恐怖・緊張', label: '無限上昇', dur: [4, 8], base: [0, 0], loop: true, custom: shepardSfx, reverb: [0.3, 0.5],
+    why: note('シェパード・トーン', '永遠に上がり（下がり）続ける錯覚。解決しない動きは緊張を持続させる。', 'shepard') },
+  { group: '恐怖・緊張', label: '忍び寄る足音', dur: [4, 8], base: [0, 0], loop: true, custom: footstepsSfx, reverb: [0.4, 0.7],
+    why: note('不規則な接近', '一定でない足音は次がいつ来るか予測できず、注意を張り詰めさせる。', 'huron06') },
+  { group: '恐怖・緊張', label: '不気味な声', dur: [2, 4], base: [-6, 6], intervals: DISSONANT,
+    contours: ['wobble', 'vibrato', 'glide'], mods: 0.5, envs: ['swell', 'tremolo'], waves: ['choir', 'rough', 'pad'],
+    accents: ['twin', 'noiseSweep'], reverb: [0.6, 0.8],
+    why: note('人に似て人でない声', '声のような音色なのに音程が不自然に揺れる：声への共感（情動伝染）と違和感が同時に起きる。', 'juslin08') },
+
+  /* ----- Sadness ----- */
+  { group: '悲しみ', label: 'ゲームオーバー', dur: [2, 3], base: [-6, 2], dir: -1, tones: 'minor',
+    contours: ['sigh', 'arp', 'glide'], mods: 0.5, envs: ['gate', 'ar', 'tremolo'],
+    waves: ['strings', 'sawtooth', 'flute', 'epiano', 'musicbox'], accents: ['sub', 'choirPad', 'echo'],
+    why: note('下がっていく旋律', '半音下行はため息の音型。低く、狭く、遅く下がる旋律は悲しみの典型的な特徴。', 'huron08') },
+  { group: '悲しみ', label: '喪失・別れ', dur: [2, 3.5], base: [-2, 6], dir: -1, tones: 'minor',
+    contours: ['arp', 'sigh'], envs: ['decay', 'swell'], waves: ['musicbox', 'epiano', 'strings', 'flute'],
+    accents: ['choirPad', 'echo', 'sub'], reverb: [0.5, 0.7],
+    why: note('短調の下行と長い余韻', '短三和音を下りながら長く響かせる。下行・短調・遅さ・残響は悲しみの典型的な手掛かり。', 'gabrielsson') },
+
+  /* ----- Recorded material ----- */
+  { group: '録音素材', label: '銃声', dur: [1, 1], base: [0, 0], custom: gunshotSfx, reverb: [0.3, 0.6],
+    why: note('突然の大音量', '鋭い立ち上がりの大音量は意味を理解する前に驚愕反射を起こす（脳幹反射）。', 'juslin08') },
+  { group: '録音素材', label: '拍手', dur: [3, 3], base: [0, 0], custom: applauseSfx, reverb: [0.3, 0.5],
+    why: note('拍手＝承認', '多数の人の拍手は称賛・承認の合図。集団の高揚が伝染する（情動伝染）。', 'juslin08') },
+  { group: '録音素材', label: '鳥のさえずり', dur: [4, 8], base: [0, 0], loop: true, custom: birdsSfx, reverb: [0.3, 0.5],
+    why: note('鳥のさえずり', '鳥の声は「安全な環境」の手掛かりとして、注意の回復やストレスの軽減と結びつくと報告されている。', 'ratcliffe') },
+  { group: '録音素材', label: '波の音', dur: [6, 8], base: [0, 0], loop: true, custom: seaSfx, reverb: [0.2, 0.4],
+    why: note('寄せては返す波', 'ゆっくりした不規則なゆらぎ（1/f的）は心地よさ・リラックスと結びつく。', 'voss') },
+  { group: '録音素材', label: 'ヘリコプター', dur: [4, 4], base: [0, 0], custom: helicopterSfx, reverb: [0.2, 0.4],
+    why: note('ドップラー効果と接近', '近づく音は高く大きく、遠ざかる音は低く小さくなる。接近する音は実際より近く速く感じられる。', 'neuhoff') },
+  { group: '録音素材', label: '電話のベル', dur: [4, 6], base: [0, 0], loop: true, custom: phoneSfx, reverb: [0.2, 0.4],
+    why: note('呼び出し音', '繰り返す呼び出し音は「応答しなければ」という切迫感を条件付けで呼び起こす。', 'juslin08') },
+  { group: '録音素材', label: '息づかい', dur: [8, 8], base: [0, 0], loop: true, custom: breathSfx, reverb: [0.3, 0.6],
+    why: note('すぐそばの息', '人の息は「誰かがそこにいる」最も身近な手掛かり。速い呼吸は不安・恐怖を伝染させる。', 'juslin08') },
+  { group: '録音素材', label: '逆再生シンバル → 衝撃', dur: [3, 3], base: [0, 0], custom: reverseCymbalSfx, reverb: [0.4, 0.6],
+    why: note('溜め → 衝撃', '音量が増していく逆再生音で予期を高め、頂点で衝撃音が来ると驚きと解決の快感が最大になる。', 'huron06') },
+  { group: '録音素材', label: '和太鼓', dur: [2, 4], base: [0, 0], loop: true, custom: taikoSfx, reverb: [0.3, 0.5],
+    why: note('太鼓のリズム', '低く強い打撃とはっきりした拍は身体のリズム同調を引き起こし、高揚・士気を高める。', 'juslin08') },
+  { group: '録音素材', label: 'ティンパニ・ロール', dur: [3, 3], base: [0, 0], custom: timpaniRollSfx, reverb: [0.4, 0.6],
+    why: note('ロール → 一撃', 'クレッシェンドするロールで緊張を溜め、一撃で解決する（予期 → 解決）。', 'huron06') },
+].map((spec) => ({ ...spec, make: (real) => buildSfx(spec, real) }));
 
 /* ======================================================================
  * Expression engine (math.js, sandboxed)
@@ -1287,6 +1845,185 @@ function noiseBufferFor(ctx) {
   return cache.noise;
 }
 
+/* ----- Sample banks (soundfont instruments + user recordings) ----- */
+const SampleBank = (() => {
+  const pending = new Map();      // key -> Promise<bank>
+  const ready = new Map();        // key -> { notes: [{ midi, buffer }] }
+  const failed = new Set();
+  let decoder = null;
+  const getDecoder = () => (decoder ??= new OfflineAudioContext(1, 1, EXPORT_SAMPLE_RATE));
+  const NOTE_BASE = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+  function midiOf(name) {
+    const m = /^([A-G])(b?)(-?\d)$/.exec(name);
+    return 12 * (Number(m[3]) + 1) + NOTE_BASE[m[1]] - (m[2] ? 1 : 0);
+  }
+
+  const decode = (arrayBuffer) => getDecoder().decodeAudioData(arrayBuffer);
+
+  async function fetchSoundfont(gm) {
+    let lastErr = null;
+    for (const base of SOUNDFONT_URLS) {
+      try {
+        const res = await fetch(`${base}${gm}-mp3.js`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.text();
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[GraphSynth] soundfont fetch failed (${base}${gm}):`, err);
+      }
+    }
+    throw lastErr;
+  }
+
+  async function loadSoundfont(gm) {
+    // Parse the data URIs as plain text (the file is never executed)
+    const text = await fetchSoundfont(gm);
+    const entries = [...text.matchAll(/"([A-G]b?-?\d)":\s*"data:audio\/mp3;base64,([^"]+)"/g)]
+      .map(([, name, b64]) => ({ midi: midiOf(name), b64 }));
+    const picked = entries.length > 24 ? entries.filter((e) => e.midi % SAMPLE_STEP === 0) : entries;
+    const notes = await Promise.all(picked.map(async ({ midi, b64 }) => {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      return { midi, buffer: await decode(bytes.buffer) };
+    }));
+    return { notes: notes.sort((a, b) => a.midi - b.midi) };
+  }
+
+  async function loadUser(inst) {
+    const data = await UserSamples.data(inst.userId);
+    return { notes: [{ midi: USER_ROOT_MIDI, buffer: await decode(data.slice(0)) }] };
+  }
+
+  /** Scales a whole bank so its loudest sample hits SAMPLE_PEAK (keeps relative dynamics between notes). */
+  function normalize(bank) {
+    let peak = 0;
+    for (const n of bank.notes) {
+      for (let c = 0; c < n.buffer.numberOfChannels; c++) {
+        const d = n.buffer.getChannelData(c);
+        for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+      }
+    }
+    if (peak < 1e-6) return bank;
+    const gain = SAMPLE_PEAK / peak;
+    for (const n of bank.notes) {
+      for (let c = 0; c < n.buffer.numberOfChannels; c++) {
+        const d = n.buffer.getChannelData(c);
+        for (let i = 0; i < d.length; i++) d[i] *= gain;
+      }
+    }
+    return bank;
+  }
+
+  function load(key) {
+    const inst = INSTRUMENTS[key];
+    if (!inst || inst.kind !== 'sample') return Promise.resolve(null);
+    if (ready.has(key)) return Promise.resolve(ready.get(key));
+    if (!pending.has(key)) {
+      const p = (inst.user ? loadUser(inst) : loadSoundfont(inst.gm))
+        .then((bank) => { ready.set(key, normalize(bank)); failed.delete(key); return bank; })
+        .catch((err) => { failed.add(key); console.error(`[GraphSynth] could not load samples for ${key}:`, err); throw err; })
+        .finally(() => pending.delete(key));
+      pending.set(key, p);
+    }
+    return pending.get(key);
+  }
+
+  function nearest(bank, midi) {
+    let best = bank.notes[0];
+    for (const n of bank.notes) if (Math.abs(n.midi - midi) < Math.abs(best.midi - midi)) best = n;
+    return best;
+  }
+
+  return { load, nearest, get: (key) => ready.get(key) ?? null, isReady: (key) => ready.has(key), hasFailed: (key) => failed.has(key), forget: (key) => ready.delete(key) };
+})();
+
+/* ----- User recordings stored in this browser (IndexedDB) ----- */
+const UserSamples = (() => {
+  const DB_NAME = 'graphsynth';
+  const STORE = 'samples';
+  let dbPromise = null;
+  const cache = new Map();        // id -> ArrayBuffer
+
+  function open() {
+    dbPromise ??= new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+
+  async function run(mode, fn) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, mode);
+      const req = fn(tx.objectStore(STORE));
+      tx.oncomplete = () => resolve(req?.result);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function list() {
+    const rows = (await run('readonly', (s) => s.getAll())) ?? [];
+    for (const r of rows) cache.set(r.id, r.data);
+    return rows.map(({ id, name }) => ({ id, name }));
+  }
+
+  /** Stores a recording; if IndexedDB is unavailable it is kept for this session only. */
+  async function add(name, data) {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    cache.set(id, data);
+    try {
+      await run('readwrite', (s) => s.put({ id, name, data }));
+      return { id, name, saved: true };
+    } catch (err) {
+      console.warn('[GraphSynth] could not persist user sample:', err);
+      return { id, name, saved: false };
+    }
+  }
+
+  async function remove(id) {
+    await run('readwrite', (s) => s.delete(id));
+    cache.delete(id);
+  }
+
+  async function data(id) {
+    if (!cache.has(id)) {
+      const row = await run('readonly', (s) => s.get(id));
+      if (!row) throw new Error('録音データが見つかりません');
+      cache.set(id, row.data);
+    }
+    return cache.get(id);
+  }
+
+  return { list, add, remove, data };
+})();
+
+const userInstKey = (id) => `user_${id}`;
+
+function registerUserSample({ id, name }) {
+  INSTRUMENTS[userInstKey(id)] = { label: `🎙 ${name}`, kind: 'sample', group: 'user', user: true, userId: id, sustain: false, level: 0.9, fallback: 'sine' };
+}
+
+const sampleKeysOf = (layers) => [...new Set(layers.map((l) => l.wave).filter((w) => INSTRUMENTS[w]?.kind === 'sample'))];
+
+/** Loads every sampled instrument the layers need; reports progress in the header. */
+async function ensureSamples(layers) {
+  const keys = sampleKeysOf(layers).filter((k) => !SampleBank.isReady(k));
+  if (!keys.length) return;
+  setLoadStatus(`🎻 音源を読み込み中…（${keys.map((k) => INSTRUMENTS[k].label).join('、')}）`);
+  const results = await Promise.allSettled(keys.map((k) => SampleBank.load(k)));
+  const failedKeys = keys.filter((_, i) => results[i].status === 'rejected');
+  setLoadStatus('');
+  if (failedKeys.length) showToast(`音源を読み込めませんでした（${failedKeys.map((k) => INSTRUMENTS[k].label).join('、')}）。シンセ音で代用します`);
+}
+
+function setLoadStatus(text) {
+  const el = $('loadStatus');
+  if (el) el.textContent = text;
+}
+
 /** Synthetic room impulse: stereo noise with a power-law decay. */
 function impulseFor(ctx) {
   const cache = cacheFor(ctx);
@@ -1345,7 +2082,10 @@ function ensureAudio() {
  * that follow the note frequency (oscillators, filters, FM depth).
  */
 function buildVoice(ctx, dest, instKey, startTime) {
-  const inst = INSTRUMENTS[instKey] ?? INSTRUMENTS.sine;
+  const requested = INSTRUMENTS[instKey] ?? INSTRUMENTS.sine;
+  // Sampled instrument without loaded samples -> play its synth fallback instead
+  if (requested.kind === 'sample' && !SampleBank.isReady(instKey)) return buildVoice(ctx, dest, requested.fallback, startTime);
+  const inst = requested;
   const out = ctx.createGain();
   out.gain.setValueAtTime(0, startTime);
   out.connect(dest);
@@ -1353,9 +2093,14 @@ function buildVoice(ctx, dest, instKey, startTime) {
   const freqParams = [];
   const maxHz = Math.min(FILTER_MAX_HZ, ctx.sampleRate / 2 - 100);
   let onFreq = null;
+  let sampler = null;
   const newOsc = () => { const o = ctx.createOscillator(); sources.push(o); return o; };
 
   switch (inst.kind) {
+    case 'sample': {
+      sampler = makeSampler(ctx, out, inst, SampleBank.get(instKey));
+      break;
+    }
     case 'rough': {
       // Amplitude modulation in the 30–150 Hz "roughness" band (scream-like)
       const osc = newOsc();
@@ -1453,7 +2198,64 @@ function buildVoice(ctx, dest, instKey, startTime) {
     }
   }
   for (const s of sources) s.start(startTime);
-  return { out, sources, freqParams, onFreq, level: inst.level, maxHz, lastY: NaN };
+  return { out, sources, freqParams, onFreq, sampler, level: inst.level, maxHz, lastY: NaN };
+}
+
+/**
+ * Note-based player for recorded samples. A new note starts when the pitch
+ * jumps, after a rest, or when the envelope retriggers; small pitch changes
+ * bend the running note via playbackRate (glides).
+ */
+function makeSampler(ctx, out, inst, bank) {
+  let cur = null;                 // { src, g, note }
+  let lastY = NaN;
+  let lastCycle = NaN;
+  const rate = (note, midi) => Math.pow(2, (midi - note.midi) / 12);
+
+  function release(n, time) {
+    n.g.gain.setTargetAtTime(0, time, SAMPLE_RELEASE_TAU);
+    n.src.stop(time + SAMPLE_RELEASE_TAU * 8);
+  }
+
+  function start(midi, time) {
+    const note = SampleBank.nearest(bank, midi);
+    const src = ctx.createBufferSource();
+    src.buffer = note.buffer;
+    src.playbackRate.setValueAtTime(rate(note, midi), time);
+    if (inst.sustain) {
+      src.loop = true;
+      src.loopStart = note.buffer.duration * 0.45;
+      src.loopEnd = note.buffer.duration * 0.9;
+    }
+    const g = ctx.createGain();
+    src.connect(g).connect(out);
+    src.start(time);
+    return { src, g, note };
+  }
+
+  return {
+    step(y, beat, envKey, time) {
+      if (!Number.isFinite(y)) {
+        if (cur) { release(cur, time); cur = null; }
+        lastY = NaN;
+        return;
+      }
+      const div = ENVELOPES[envKey].div;
+      const cycle = div ? Math.floor(beat * div + 1e-9) : 0;
+      const midi = 69 + y;
+      if (!cur || !Number.isFinite(lastY) || Math.abs(y - lastY) > JUMP_SEMITONES || cycle !== lastCycle) {
+        if (cur) release(cur, time);
+        cur = start(midi, time);
+      } else {
+        cur.src.playbackRate.linearRampToValueAtTime(rate(cur.note, midi), time);
+      }
+      lastY = y;
+      lastCycle = cycle;
+    },
+    stop(time) {
+      if (cur) { release(cur, time); cur = null; }
+    },
+  };
 }
 
 function createVoices(startTime) {
@@ -1476,6 +2278,7 @@ function destroyVoices() {
     else { g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); }
     g.linearRampToValueAtTime(0, now + VOICE_STOP_SEC);
     for (const s of v.sources) s.stop(now + VOICE_STOP_SEC + 0.02);
+    v.sampler?.stop(now + VOICE_STOP_SEC);
   }
   audio.voices = [];
 }
@@ -1484,6 +2287,7 @@ function destroyVoices() {
 function scheduleVoice(voice, layer, beat, time, silent) {
   const y = silent || layer.muted ? NaN : evalLayer(layer, beat);
   let amp = 0;
+  voice.sampler?.step(y, beat, layer.env, time);
   if (Number.isFinite(y)) {
     const freq = semitoneToFreq(y);
     const jump = !Number.isFinite(voice.lastY) || Math.abs(y - voice.lastY) > JUMP_SEMITONES;
@@ -1502,7 +2306,7 @@ function scheduleVoice(voice, layer, beat, time, silent) {
 /* ======================================================================
  * Transport (play / pause / seek, audio-clock based)
  * ==================================================================== */
-const transport = { playing: false, beat: 0, anchorTime: 0, anchorBeat: 0, nextTime: 0, timer: 0 };
+const transport = { playing: false, loading: false, loadToken: 0, beat: 0, anchorTime: 0, anchorBeat: 0, nextTime: 0, timer: 0 };
 
 const rawBeatAt = (time) => transport.anchorBeat + ((time - transport.anchorTime) * state.bpm) / 60;
 const wrapBeat = (b) => (state.loop ? posMod(b, state.length) : Math.min(b, state.length));
@@ -1530,8 +2334,18 @@ function startAt(beat) {
   schedulerTick();
 }
 
-function play() {
-  ensureAudio();
+/** Starts playback, first waiting for any recorded instruments the song needs. */
+async function play() {
+  ensureAudio(); // inside the user gesture, before any await
+  if (transport.playing || transport.loading) return;
+  if (sampleKeysOf(state.layers).some((k) => !SampleBank.isReady(k))) {
+    const token = (transport.loadToken = (transport.loadToken ?? 0) + 1);
+    transport.loading = true;
+    updatePlayButton();
+    await ensureSamples(state.layers);
+    transport.loading = false;
+    if (token !== transport.loadToken) return; // cancelled (pause / song change) while loading
+  }
   if (transport.beat >= state.length) transport.beat = 0;
   transport.playing = true;
   startAt(transport.beat);
@@ -1540,6 +2354,12 @@ function play() {
 }
 
 function pause() {
+  if (transport.loading) {
+    transport.loadToken += 1; // cancel the pending start
+    transport.loading = false;
+    updatePlayButton();
+    return;
+  }
   if (!transport.playing) return;
   transport.beat = currentBeat();
   transport.playing = false;
@@ -1548,7 +2368,7 @@ function pause() {
   updatePlayButton();
 }
 
-const togglePlay = () => (transport.playing ? pause() : play());
+const togglePlay = () => (transport.playing || transport.loading ? pause() : play());
 
 function seek(beat) {
   const b = clamp(beat, 0, state.length);
@@ -1876,6 +2696,18 @@ function optionList(entries, selected) {
   });
 }
 
+/** Instrument <optgroup>s: synth / recorded instruments / recorded effects / user sounds. */
+function instrumentOptions(selected) {
+  return Object.entries(INSTRUMENT_GROUPS).flatMap(([group, label]) => {
+    const entries = Object.entries(INSTRUMENTS).filter(([, v]) => (v.group ?? 'synth') === group);
+    if (!entries.length) return [];
+    const og = document.createElement('optgroup');
+    og.label = label;
+    og.append(...optionList(entries.map(([k, v]) => [k, v.label]), selected));
+    return [og];
+  });
+}
+
 function buildLayerCard(layer, index) {
   const card = document.createElement('div');
   card.className = 'layer' + (layer.muted ? ' muted' : '');
@@ -1928,7 +2760,7 @@ function buildLayerCard(layer, index) {
   ta.value = layer.expr;
   syncError();
   syncMute();
-  waveSel.append(...optionList(Object.entries(INSTRUMENTS).map(([k, v]) => [k, v.label]), layer.wave));
+  waveSel.append(...instrumentOptions(layer.wave));
   envSel.append(...optionList(Object.entries(ENVELOPES).map(([k, v]) => [k, v.label]), layer.env));
   volInput.value = layer.vol;
 
@@ -1954,6 +2786,9 @@ function buildLayerCard(layer, index) {
   waveSel.addEventListener('change', () => {
     layer.wave = waveSel.value;
     rebuildVoices();
+    if (INSTRUMENTS[layer.wave].kind === 'sample' && !SampleBank.isReady(layer.wave)) {
+      ensureSamples([layer]).then(rebuildVoices); // swap the fallback synth for the real samples
+    }
     refreshVisuals(); // drum (noise) layers are drawn differently
   });
   envSel.addEventListener('change', () => { layer.env = envSel.value; });
@@ -1979,8 +2814,9 @@ const PAUSE_ICON = '<svg width="22" height="22" viewBox="0 0 24 24"><rect x="6" 
 
 function updatePlayButton() {
   const btn = $('play');
-  btn.innerHTML = transport.playing ? PAUSE_ICON : PLAY_ICON;
-  btn.setAttribute('aria-label', transport.playing ? '一時停止' : '再生');
+  btn.innerHTML = transport.playing || transport.loading ? PAUSE_ICON : PLAY_ICON;
+  btn.classList.toggle('loading', !!transport.loading);
+  btn.setAttribute('aria-label', transport.loading ? '音源を読み込み中（クリックで中止）' : transport.playing ? '一時停止' : '再生');
 }
 
 const ui = { progressDragging: false, graphDragging: false, lastReadout: '' };
@@ -2032,6 +2868,7 @@ async function renderSong(mode) {
   const seamless = mode === 'seamless';
   const loops = seamless ? 2 : Number(mode);
   const totalSec = seamless ? loopSec * 2 + LOOP_XFADE_SEC + 0.05 : loopSec * loops + EXPORT_TAIL_SEC;
+  await ensureSamples(state.layers);
   const ctx = new OfflineAudioContext(2, Math.ceil(totalSec * sr), sr);
   const master = buildMasterChain(ctx, ctx.destination, state.volume, state.reverb).input;
   const voices = state.layers.map((layer) => buildVoice(ctx, master, layer.wave, 0));
@@ -2194,6 +3031,7 @@ function applySong(song) {
   refreshVisuals();
   renderNotes();
   renderFavorites();
+  ensureSamples(state.layers); // start downloading recorded instruments in the background
   if (wasPlaying) play();
 }
 
@@ -2382,6 +3220,78 @@ function randomize() {
   compose();
 }
 
+/* ----- User recordings UI ----- */
+const USER_FILE_MAX_BYTES = 20 * 1024 * 1024;
+const USER_PREVIEW_MAX_SEC = 30;
+
+async function importUserFiles(files) {
+  for (const file of files) {
+    if (file.size > USER_FILE_MAX_BYTES) { showToast(`${file.name} は大きすぎます（20MBまで）`); continue; }
+    try {
+      const data = await file.arrayBuffer();
+      await new OfflineAudioContext(1, 1, EXPORT_SAMPLE_RATE).decodeAudioData(data.slice(0)); // validate format
+      const name = file.name.replace(/\.[^.]+$/, '').slice(0, 40);
+      const rec = await UserSamples.add(name, data);
+      registerUserSample(rec);
+      showToast(rec.saved ? `「${name}」を読み込みました` : `「${name}」を読み込みました（このブラウザでは保存できないため、閉じると消えます）`);
+    } catch (err) {
+      console.error('[GraphSynth] could not import audio file:', err);
+      showToast(`${file.name} を読み込めませんでした（対応していない形式の可能性）`);
+    }
+  }
+  renderUserSamples();
+  renderLayers();
+}
+
+function renderUserSamples() {
+  const ul = $('userSamples');
+  ul.innerHTML = '';
+  for (const [key, inst] of Object.entries(INSTRUMENTS).filter(([, v]) => v.user)) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = inst.label;
+    const btns = document.createElement('span');
+    const tryBtn = document.createElement('button');
+    tryBtn.className = 'icon-btn';
+    tryBtn.type = 'button';
+    tryBtn.textContent = '▶ 試す';
+    tryBtn.addEventListener('click', () => previewUserSample(key));
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.type = 'button';
+    del.textContent = '✕';
+    del.setAttribute('aria-label', `${inst.label} を削除`);
+    del.addEventListener('click', () => deleteUserSample(key));
+    btns.append(tryBtn, ' ', del);
+    li.append(name, btns);
+    ul.appendChild(li);
+  }
+}
+
+async function previewUserSample(key) {
+  ensureAudio();
+  await ensureSamples([{ wave: key }]);
+  const bank = SampleBank.get(key);
+  if (!bank) return;
+  const dur = Math.min(bank.notes[0].buffer.duration, USER_PREVIEW_MAX_SEC);
+  const name = INSTRUMENTS[key].label.replace(/^🎙 /, '');
+  switchAndPlay(sfxSong(name, dur + 0.2, 0.2, [{ expr: '0', amp: '1', wave: key, vol: 0.55 }], [
+    note('自分の音', '元の高さ（y = 0）で1回再生。レイヤーの数式を書き換えると音程やリズムを付けられる（例：pick(floor(x), 0, 4, 7, 12)）。', ''),
+  ]));
+}
+
+async function deleteUserSample(key) {
+  try {
+    await UserSamples.remove(INSTRUMENTS[key].userId);
+  } catch (err) {
+    console.warn('[GraphSynth] could not delete user sample:', err);
+  }
+  delete INSTRUMENTS[key];
+  SampleBank.forget(key);
+  renderUserSamples();
+  renderLayers();
+}
+
 function bindEmotionUI() {
   const pad = $('emoPad');
   const fromEvent = (e) => {
@@ -2431,7 +3341,7 @@ function bindEmotionUI() {
     b.className = 'chip-btn';
     b.textContent = s.label;
     b.title = 'クリックするたびに少し違うバリエーションを生成';
-    b.addEventListener('click', () => switchAndPlay(s.make()));
+    b.addEventListener('click', () => switchAndPlay(s.make($('sfxMode').value === 'real')));
     groups.get(s.group).appendChild(b);
   }
 }
@@ -2558,6 +3468,11 @@ function bindControls() {
 
   bindEmotionUI();
   $('exportBtn').addEventListener('click', exportAudio);
+  $('credit').textContent = `${SOUNDFONT_CREDIT}。ゲームなどで公開する場合はこのクレジット表記が必要です。`;
+  $('userFile').addEventListener('change', (e) => {
+    importUserFiles([...e.target.files]);
+    e.target.value = '';
+  });
 
   $('reverb').addEventListener('input', (e) => {
     state.reverb = Number(e.target.value);
@@ -2635,19 +3550,26 @@ function bindControls() {
   new ResizeObserver(resizeGraph).observe(document.querySelector('.graph-wrap'));
 }
 
-function init() {
+async function init() {
   if (!window.math || !window.katex) {
     document.querySelector('.app').innerHTML = '<div class="fatal">ライブラリ（math.js / KaTeX）を読み込めませんでした。ネット接続を確認してください。</div>';
     console.error('[GraphSynth] math.js or KaTeX failed to load');
     return;
   }
+  // Register saved recordings first so songs that use them resolve their instrument
+  try {
+    (await UserSamples.list()).forEach(registerUserSample);
+  } catch (err) {
+    console.warn('[GraphSynth] user samples unavailable (IndexedDB):', err);
+  }
   bindControls();
+  renderUserSamples();
   updatePlayButton();
   updateHistoryButton();
   const shared = location.hash.length > 1 ? decodeSong(location.hash.slice(1)) : null;
   $('climax').checked = true;
   setEmotionPoint(emo.v, emo.a);
-  applySong(shared ?? EmotionGen.generate({ v: emo.v, a: emo.a, climax: true }));
+  applySong(shared ?? EmotionGen.generate({ v: emo.v, a: emo.a, climax: true, palette: $('palette').value }));
   resizeGraph();
   requestAnimationFrame(frame);
 }
