@@ -152,6 +152,29 @@
   .export-grid select { width: 100%; font-size: 12px; padding: 6px 8px; }
   .export-status { font-size: 12px; color: var(--muted); font-family: var(--mono); line-height: 1.5; }
   .export-status:empty { display: none; }
+  #emoPad { width: 100%; height: 240px; display: block; border-radius: 10px; cursor: crosshair; touch-action: none; border: 1px solid var(--line); }
+  .emo-status { font-size: 12px; color: var(--muted); font-family: var(--mono); min-height: 1.4em; }
+  .emo-status b { color: var(--accent-2); font-family: var(--sans); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  .chip-btn:hover { border-color: var(--accent); }
+  .emo-opts { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .check input { accent-color: var(--accent); }
+  .sfx { display: flex; flex-direction: column; gap: 8px; }
+  .sfx-group { display: flex; flex-direction: column; gap: 5px; }
+  .sfx-group small { color: var(--muted); font-size: 11px; letter-spacing: .06em; }
+  .layer input.amp { width: 100%; background: #0f0e0c; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
+  .layer input.amp.invalid { border-color: var(--error); }
+  .notes { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .notes[hidden] { display: none; }
+  .notes-list { margin: 0; padding-left: 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px 22px; }
+  .notes-list li { font-size: 13px; line-height: 1.6; }
+  .notes-list li::marker { color: var(--accent); font-family: var(--mono); }
+  .notes-list b { color: var(--text); font-weight: 600; }
+  .notes-list p { margin: 2px 0; color: #cfc6ba; }
+  .notes-list cite { display: block; font-style: normal; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .notes-foot { margin: 0; font-size: 11px; color: var(--muted); }
   .song-name { font-family: var(--mono); font-size: 13px; color: var(--accent-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
 
   .toast {
@@ -177,13 +200,12 @@
       <div class="logo-mark" aria-hidden="true">
         <svg width="20" height="20" viewBox="0 0 20 20"><path d="M2 14 C5 2, 8 2, 10 10 S15 18, 18 6" fill="none" stroke="#1a0f05" stroke-width="2.4" stroke-linecap="round"/><circle cx="10" cy="10" r="2.4" fill="#ff3b30"/></svg>
       </div>
-      <div>GRAPH·SYNTH<br><small>数式を描いて、鳴らす。</small></div>
+      <div>GRAPH·SYNTH<br><small>感情を、数式で設計する。</small></div>
     </div>
     <span class="song-name" id="songName"></span>
     <div class="spacer"></div>
     <button class="btn" id="prevSong" title="ひとつ前の曲に戻す">↶ 戻る</button>
-    <label class="field">スタイル <select id="style" title="ランダム生成するBGMのジャンル"></select></label>
-    <button class="btn accent" id="randomize" title="ランダムな数式で曲を作る（R キー）">🎲 ランダム生成</button>
+    <button class="btn accent" id="randomize" title="選んだ感情でもう一曲（R キー）">🎲 もう一曲</button>
     <label class="field">プリセット <select id="preset"></select></label>
     <button class="btn" id="share" title="現在の数式をURLとしてコピー">リンクをコピー</button>
   </header>
@@ -203,14 +225,45 @@
         </div>
         <label class="knob"><span>テンポ <output id="bpmOut">120</output></span><input type="range" id="bpm" min="40" max="240" step="1" value="120"></label>
         <label class="knob"><span>音量 <output id="volOut">70</output></span><input type="range" id="volume" min="0" max="1" step="0.01" value="0.7"></label>
+        <label class="knob"><span>残響 <output id="reverbOut">30</output></span><input type="range" id="reverb" min="0" max="1" step="0.01" value="0.3"></label>
         <button class="btn toggle on" id="loop" aria-pressed="true">⟲ ループ</button>
         <canvas id="scope" aria-hidden="true"></canvas>
       </div>
 
+      <div class="card notes" id="notes" hidden></div>
       <div class="card equations" id="equations"></div>
     </section>
 
     <aside class="side">
+      <div class="card side-section">
+        <div class="side-title">感情デザイナー</div>
+        <canvas id="emoPad" aria-label="感情の座標を選ぶ（横：快-不快、縦：覚醒-鎮静）"></canvas>
+        <div class="emo-status" id="emoStatus"></div>
+        <div class="chips" id="scenes" aria-label="ゲームの場面から選ぶ"></div>
+        <div class="emo-opts">
+          <label class="check"><input type="checkbox" id="climax"> 鳥肌のクライマックス</label>
+          <label class="field">音色 <select id="palette"><option value="auto">感情に合わせる</option><option value="chip">8bit</option></select></label>
+        </div>
+        <button class="btn accent" id="compose">🎼 この感情で作曲</button>
+        <details>
+          <summary>この仕組みの理論</summary>
+          <ul>
+            <li><b>2軸の感情モデル</b>：横＝快–不快（Valence）、縦＝覚醒–鎮静（Arousal）。点の位置から最も近い感情レシピを選び、テンポ・音域・残響を連続的に調整（Russell 1980）。</li>
+            <li><b>音楽の手掛かり</b>：テンポ・調性・音域・音程幅・奏法・音色・リズム密度が感情表現の主要因（Juslin & Laukka 2003; Gabrielsson & Lindström 2010）。</li>
+            <li><b>感情が起きる仕組み</b>：脳幹反射・リズム同調・評価条件付け・情動伝染・視覚的イメージ・エピソード記憶・予期・美的判断（BRECVEMA; Juslin 2013）。</li>
+            <li><b>予期と解決</b>：期待→緊張→解決の設計が感動と快感を生む（Huron 2006 ITPRA）。</li>
+            <li><b>鳥肌・涙</b>：倚音、下行ゼクエンツ、急な音量増加・音域拡大（Sloboda 1991; Guhn et al. 2007; Salimpoor et al. 2011）。</li>
+            <li><b>不快・恐怖</b>：ラフネス（臨界帯域内の干渉）、悲鳴の振幅変調、非線形音、接近音（Plomp & Levelt 1965; Arnal et al. 2015; Blumstein et al. 2012; Neuhoff 2001）。</li>
+          </ul>
+          作曲すると、なぜその感情になるのかの根拠がグラフの下に表示されます。
+        </details>
+      </div>
+
+      <div class="card side-section">
+        <div class="side-title">効果音（SFX）</div>
+        <div id="sfx" class="sfx"></div>
+      </div>
+
       <div class="card side-section">
         <div class="side-title">お気に入り <span id="favCount"></span></div>
         <div class="fav-save">
@@ -1065,7 +1118,7 @@ const Expr = !window.math ? null : (() => {
   // Music-friendly helper functions available inside formulas.
   math.import({
     frac: fracPart,
-    pick: (i, ...vals) => (vals.length ? vals[posMod(Math.floor(i), vals.length)] : NaN),
+    pick: (i, ...vals) => (vals.length && Number.isFinite(i) ? vals[posMod(Math.floor(i), vals.length)] : NaN),
     tri: (v) => 1 - 4 * Math.abs(fracPart(v + 0.25) - 0.5),
     saw: (v) => 2 * fracPart(v) - 1,
     sqr: (v) => (fracPart(v) < 0.5 ? 1 : -1),
@@ -1686,7 +1739,7 @@ function drawDrumLane(ctx, layer, color) {
   for (let px = plot.l; px <= plot.r; px += 1) {
     const x = Math.min(pxToX(px), state.length - 1e-9);
     if (!Number.isFinite(evalLayer(layer, x))) continue;
-    const h = DRUM_LANE_PX * envelopeAt(layer.env, x);
+    const h = DRUM_LANE_PX * envelopeAt(layer.env, x) * Math.min(1, ampAt(layer, x));
     if (h < 1) continue;
     ctx.moveTo(px, plot.b);
     ctx.lineTo(px, plot.b - h);
@@ -2217,8 +2270,167 @@ function goBack() {
   updateHistoryButton();
 }
 
+/** Switches song and starts playback from the top (user-initiated actions). */
+function switchAndPlay(song) {
+  switchSong(song);
+  seek(0);
+  if (!transport.playing) play();
+}
+
+/* ----- Emotion designer (valence × arousal pad) ----- */
+const EMO_PAD_PAD = 14;
+const EMO_TINTS = [
+  { v: 1, a: 1, color: 'rgba(250,204,21,' },    // excited / happy
+  { v: -1, a: 1, color: 'rgba(255,59,48,' },    // angry / afraid
+  { v: -1, a: -1, color: 'rgba(96,165,250,' },  // sad / depressed
+  { v: 1, a: -1, color: 'rgba(79,209,197,' },   // calm / content
+];
+const emo = { v: EMOTIONS.touching.v, a: EMOTIONS.touching.a, dragging: false };
+
+function emoGeometry() {
+  const c = $('emoPad');
+  return { c, w: c.clientWidth, h: c.clientHeight };
+}
+const emoToPx = (v, a, w, h) => [EMO_PAD_PAD + ((v + 1) / 2) * (w - 2 * EMO_PAD_PAD), EMO_PAD_PAD + ((1 - a) / 2) * (h - 2 * EMO_PAD_PAD)];
+const pxToEmo = (px, py, w, h) => [
+  clamp(((px - EMO_PAD_PAD) / (w - 2 * EMO_PAD_PAD)) * 2 - 1, -1, 1),
+  clamp(1 - ((py - EMO_PAD_PAD) / (h - 2 * EMO_PAD_PAD)) * 2, -1, 1),
+];
+
+function drawEmoPad() {
+  const { c, w, h } = emoGeometry();
+  if (!w) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = GRAPH_COLORS.bg;
+  ctx.fillRect(0, 0, w, h);
+  for (const t of EMO_TINTS) {
+    const [x, y] = emoToPx(t.v, t.a, w, h);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, Math.max(w, h) * 0.75);
+    g.addColorStop(0, `${t.color}0.16)`);
+    g.addColorStop(1, `${t.color}0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  const [cx, cy] = emoToPx(0, 0, w, h);
+  ctx.strokeStyle = GRAPH_COLORS.gridMajor;
+  ctx.lineWidth = 1;
+  line(ctx, EMO_PAD_PAD, cy, w - EMO_PAD_PAD, cy);
+  line(ctx, cx, EMO_PAD_PAD, cx, h - EMO_PAD_PAD);
+  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.fillStyle = GRAPH_COLORS.label;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'right';
+  ctx.fillText('快 →', w - 4, cy - 8);
+  ctx.textAlign = 'left';
+  ctx.fillText('← 不快', 4, cy - 8);
+  ctx.textAlign = 'center';
+  ctx.fillText('覚醒 ↑', cx + 22, 8);
+  ctx.fillText('鎮静 ↓', cx + 22, h - 8);
+
+  const current = nearestEmotion(emo.v, emo.a);
+  ctx.font = '11px "Inter", "Noto Sans JP", sans-serif';
+  for (const [key, e] of Object.entries(EMOTIONS)) {
+    const [x, y] = emoToPx(e.v, e.a, w, h);
+    const active = key === current;
+    ctx.fillStyle = active ? GRAPH_COLORS.labelStrong : GRAPH_COLORS.label;
+    ctx.beginPath();
+    ctx.arc(x, y, active ? 3.5 : 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = active ? '#ffb25e' : '#a0968b';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(e.label, x, y - 4);
+  }
+  const [px, py] = emoToPx(emo.v, emo.a, w, h);
+  ctx.save();
+  ctx.shadowColor = GRAPH_COLORS.red;
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = GRAPH_COLORS.red;
+  ctx.beginPath();
+  ctx.arc(px, py, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function updateEmoStatus() {
+  const e = EMOTIONS[nearestEmotion(emo.v, emo.a)];
+  const fmt = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
+  $('emoStatus').innerHTML = `<b>${e.label}</b> · GEMS: ${e.gems}<br>快 ${fmt(emo.v)} / 覚醒 ${fmt(emo.a)}`;
+}
+
+function setEmotionPoint(v, a) {
+  emo.v = v;
+  emo.a = a;
+  drawEmoPad();
+  updateEmoStatus();
+}
+
+function compose() {
+  switchAndPlay(EmotionGen.generate({ v: emo.v, a: emo.a, climax: $('climax').checked, palette: $('palette').value }));
+}
+
 function randomize() {
-  switchSong(SongGen.generate($('style').value));
+  compose();
+}
+
+function bindEmotionUI() {
+  const pad = $('emoPad');
+  const fromEvent = (e) => {
+    const r = pad.getBoundingClientRect();
+    const [v, a] = pxToEmo(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    setEmotionPoint(v, a);
+  };
+  pad.addEventListener('pointerdown', (e) => { emo.dragging = true; pad.setPointerCapture(e.pointerId); fromEvent(e); });
+  pad.addEventListener('pointermove', (e) => { if (emo.dragging) fromEvent(e); });
+  pad.addEventListener('pointerup', () => { if (emo.dragging) { emo.dragging = false; compose(); } });
+  pad.addEventListener('pointercancel', () => { emo.dragging = false; });
+  new ResizeObserver(drawEmoPad).observe(pad);
+
+  const scenes = $('scenes');
+  for (const s of SCENES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip-btn';
+    b.textContent = s.label;
+    b.addEventListener('click', () => {
+      const e = EMOTIONS[s.emo];
+      // Small jitter so repeated clicks explore the neighbourhood of the emotion
+      setEmotionPoint(clamp(e.v + (Math.random() - 0.5) * 0.1, -1, 1), clamp(e.a + (Math.random() - 0.5) * 0.1, -1, 1));
+      $('climax').checked = !!s.climax;
+      compose();
+    });
+    scenes.appendChild(b);
+  }
+  $('compose').addEventListener('click', compose);
+
+  const sfxBox = $('sfx');
+  const groups = new Map();
+  for (const s of SFX) {
+    if (!groups.has(s.group)) {
+      const wrap = document.createElement('div');
+      wrap.className = 'sfx-group';
+      const title = document.createElement('small');
+      title.textContent = s.group;
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      wrap.append(title, chips);
+      sfxBox.appendChild(wrap);
+      groups.set(s.group, chips);
+    }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip-btn';
+    b.textContent = s.label;
+    b.title = 'クリックするたびに少し違うバリエーションを生成';
+    b.addEventListener('click', () => switchAndPlay(s.make()));
+    groups.get(s.group).appendChild(b);
+  }
 }
 
 /* ----- Favorites (stored in this browser's localStorage) ----- */
@@ -2341,10 +2553,13 @@ function bindControls() {
   presetSel.options[0].disabled = true;
   presetSel.addEventListener('change', () => switchSong(PRESETS[Number(presetSel.value)], presetSel.value));
 
-  const styleSel = $('style');
-  styleSel.append(...optionList(Object.entries(STYLES).map(([k, s]) => [k, s.label]), 'auto'));
-  styleSel.addEventListener('change', randomize);
+  bindEmotionUI();
   $('exportBtn').addEventListener('click', exportAudio);
+
+  $('reverb').addEventListener('input', (e) => {
+    state.reverb = Number(e.target.value);
+    syncReverb();
+  });
 
   $('randomize').addEventListener('click', randomize);
   $('prevSong').addEventListener('click', goBack);
@@ -2379,8 +2594,7 @@ function bindControls() {
 
   $('loop').addEventListener('click', (e) => {
     retime(() => { state.loop = !state.loop; });
-    e.currentTarget.classList.toggle('on', state.loop);
-    e.currentTarget.setAttribute('aria-pressed', String(state.loop));
+    syncLoopButton();
   });
 
   $('length').addEventListener('change', (e) => {
@@ -2428,7 +2642,9 @@ function init() {
   updatePlayButton();
   updateHistoryButton();
   const shared = location.hash.length > 1 ? decodeSong(location.hash.slice(1)) : null;
-  applySong(shared ?? SongGen.generate());
+  $('climax').checked = true;
+  setEmotionPoint(emo.v, emo.a);
+  applySong(shared ?? EmotionGen.generate({ v: emo.v, a: emo.a, climax: true }));
   resizeGraph();
   requestAnimationFrame(frame);
 }
